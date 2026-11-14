@@ -28,6 +28,22 @@ try { recWait = localStorage.getItem('tapeloss.recwait') !== '0'; } catch (_) {}
 let statusText = 'Press Play', statusWarn = false;
 // quiet when testing: 127.0.0.1 or ?mute runs the audio but sends silence to the speakers; a tap on the screen unmutes
 let muted = location.hostname === '127.0.0.1' || new URLSearchParams(location.search).has('mute');
+// Feedback guard. A built-in microphone hears the speakers, and through reverb and grain feedback that howls.
+// So when the input is a built-in microphone the output is held silent until a tap says headphones are on
+// ('mic'), and if the output then sits at full level for a couple of seconds it is cut again ('howl').
+// An audio interface or a sampler on USB is not a built-in microphone: nothing is held, nothing is asked.
+let guard = null, micOk = false, liveBuiltIn = false, howl = 0;
+function micLooksBuiltIn(label) {
+  return !label || /built-?in|internal|macbook|imac|ipad|iphone|speakerphone|microphone array|^default$|webcam|facetime/i.test(label);
+}
+/** What the screen says in red, in place of the status, while the output is being held silent. */
+function notice() {
+  if (muted) return 'MUTED · tap here for sound';
+  if (guard === 'mic') return 'Built-in microphone: put on headphones, then tap here to hear it';
+  if (guard === 'howl') return 'Feedback caught, sound is off: turn down or use headphones, then tap here';
+  return '';
+}
+function applyMute() { if (master) master.gain.value = muted || guard ? 0 : 1; }
 
 // ── what things do, in a sentence (the help line shows these) ────────────────────────────────────
 const HELP = {
@@ -541,7 +557,7 @@ async function ensureAudio() {
     else { meters.push(d); if (meters.length > 400) meters.splice(0, 200); }
   };
   analyser = ctx.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0.72;
-  master = ctx.createGain(); master.gain.value = muted ? 0 : 1;
+  master = ctx.createGain(); applyMute();
   node.connect(analyser); analyser.connect(master); master.connect(ctx.destination);
   for (const id in values) node.parameters.get(id).value = effective(id);
   if (!tape.file.buf) setTape('file', makeDemo(ctx), 'Demo loop');
@@ -595,10 +611,14 @@ async function openLive() {
   });
   liveNode = ctx.createMediaStreamSource(liveStream);
   liveNode.connect(node);
+  liveBuiltIn = micLooksBuiltIn((liveStream.getAudioTracks()[0] || {}).label || '');
+  if (liveBuiltIn && !micOk) { guard = 'mic'; applyMute(); }
 }
 function closeLive() {
   if (liveNode) { liveNode.disconnect(); liveNode = null; }
   if (liveStream) { liveStream.getTracks().forEach(t => t.stop()); liveStream = null; }
+  liveBuiltIn = false; howl = 0;
+  if (guard) { guard = null; applyMute(); }          // with the microphone closed there is nothing to guard
 }
 function stopBuf() { if (bufNode) { try { bufNode.stop(); } catch (_) {} bufNode.disconnect(); bufNode = null; } }
 function startBuf() {
@@ -943,6 +963,7 @@ function drawMachine(g, xC, cy, R, sep, alpha, lineW) {
 
 // the loop strip: the whole loop or file, the part that plays drawn bright, two ends you can drag
 let srcGeom = null, drag = null;
+let clockGeom = null;          // where the counter is drawn this frame: a tap on it sets it back to 00:00
 function drawSource(g, x0, x1, top, bot) {
   const t = curTape(), w = x1 - x0;
   g.textBaseline = 'alphabetic'; g.font = '600 9px ' + FONT; g.fillStyle = DIM; g.textAlign = 'left';
@@ -1069,8 +1090,8 @@ function drawWork(g, W, H, dt, bypassed) {
   // words, left of the machine: what is playing, lamps, and the knob in hand
   const lx1 = xC - sep - R - 14;
   g.textBaseline = 'alphabetic'; g.textAlign = 'left';
-  g.font = '600 12px ' + FONT; g.fillStyle = muted || statusWarn ? HOT : INK;
-  let st = muted ? 'MUTED · tap here for sound' : statusText; const full = st;
+  g.font = '600 12px ' + FONT; g.fillStyle = notice() || statusWarn ? HOT : INK;
+  let st = notice() || statusText; const full = st;
   while (st.length > 4 && g.measureText(st).width > lx1 - x0) st = st.slice(0, -2);
   g.fillText(st === full ? st : st + '…', x0, 24);
   const lamps = [['PLAY', playing], ['REC', !!rec, 1], ['DROP', dropVis > 0.15, 1], ['FREEZE', frozen], ['LIMIT', gr < 0.985, 1], ['BYPASS', bypassed]];
@@ -1086,6 +1107,7 @@ function drawWork(g, W, H, dt, bypassed) {
   g.textAlign = 'right'; g.font = '600 13px ' + MONO; g.fillStyle = INK;
   const tm = String(Math.floor(secs / 60)).padStart(2, '0') + ':' + String(secs % 60).padStart(2, '0');
   g.fillText(tm, x1, 24);
+  clockGeom = { x: x1 - 84, y: 0, w: 100, h: 44 };
   if (playing) { g.beginPath(); g.arc(x1 - g.measureText(tm).width - 9, 20, 3.5, 0, TWO_PI); g.fillStyle = HOT; g.fill(); }
   const bx = Math.max(xC + sep + R + 40, x1 - 170);
   [['IN', peakIn], ['OUT', peakOut], ['GR', gr, 1]].forEach(([name, v, reduce], i) => {
@@ -1143,7 +1165,7 @@ function drawShow(g, W, H, dt) {
   g.textAlign = 'right'; g.font = '600 13px ' + MONO; g.fillStyle = INK;
   g.fillText(String(Math.floor(secs / 60)).padStart(2, '0') + ':' + String(secs % 60).padStart(2, '0'), W - 20, 26);
   const age = performance.now() - showSince;                     // a quiet reminder of the way back, then it goes
-  if (age < 3500) { g.globalAlpha = clamp01((3500 - age) / 800); g.textAlign = 'center'; g.font = '600 11px ' + FONT; g.fillStyle = DIM; g.fillText(muted ? 'tap for sound · tap again to go back' : 'tap anywhere to go back', W / 2, H - 14); g.globalAlpha = 1; }
+  if (age < 3500) { g.globalAlpha = clamp01((3500 - age) / 800); g.textAlign = 'center'; g.font = '600 11px ' + FONT; g.fillStyle = DIM; g.fillText(notice() ? 'tap for sound · tap again to go back' : 'tap anywhere to go back', W / 2, H - 14); g.globalAlpha = 1; }
 }
 
 // the small displays on the chain, and the two on the Space and Master pages
@@ -1286,6 +1308,10 @@ function draw(now) {
       spec[i] = v > spec[i] ? v : spec[i] + (v - spec[i]) * Math.min(1, dt * 7);
     }
   }
+  // feedback shows as the input and the output both pinned high (the limiter holds the output near 0.7) for seconds on end
+  if (liveNode && liveBuiltIn && !guard && !muted && peakOut > 0.6 && peakIn > 0.5) { howl += dt; if (howl > 1.8) { guard = 'howl'; howl = 0; applyMute(); } }
+  else howl = Math.max(0, howl - dt * 2);
+  clockGeom = null;
   const { g, W, H } = fit(deckCv);
   if (skin !== 'unit' && typeof drawSkin === 'function') { drawSkin(g, W, H, dt, bypassed, show); if (!show) { drawMinis(bypassed); drawScopes(bypassed); } }
   else if (show) drawShow(g, W, H, dt);
@@ -1295,8 +1321,12 @@ requestAnimationFrame(draw);
 
 // the screen under your finger: unmute, leave the Display, or drag the loop's ends
 deckCv.addEventListener('pointerdown', e => {
-  if (muted) { muted = false; if (master) master.gain.value = 1; return; }
+  if (muted || guard) { muted = false; if (guard) { guard = null; micOk = true; howl = 0; } applyMute(); return; }
   if (document.body.classList.contains('show')) { setShow(false); return; }
+  if (clockGeom) {                                     // the counter: a tap sets it back to zero, like the button on a deck
+    const b = deckCv.getBoundingClientRect(), cx = e.clientX - b.left, cy = e.clientY - b.top, c = clockGeom;
+    if (cx >= c.x && cx <= c.x + c.w && cy >= c.y && cy <= c.y + c.h) { played = 0; say('Counter back to 00:00'); return; }
+  }
   if (!srcGeom) return;
   const r = deckCv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, G = srcGeom, t = curTape();
   if (y < G.top || y > G.bot || x < G.x0 - 22 || x > G.x1 + 22) return;
@@ -1348,4 +1378,4 @@ $('#show').addEventListener('click', () => { showSince = performance.now(); });
 
 syncUI();
 window.tapeloss = { values, effective, setValue, applyPreset, play, stop, toggleRec, setSource, setShow, holdStart, holdEnd, undo, redo, tape, meters,
-  get ctx() { return ctx; }, get source() { return source; }, get playing() { return playing; }, get rec() { return rec; }, get muted() { return muted; }, set muted(v) { muted = v; if (master) master.gain.value = v ? 0 : 1; } };
+  get ctx() { return ctx; }, get source() { return source; }, get playing() { return playing; }, get rec() { return rec; }, get muted() { return muted; }, set muted(v) { muted = v; applyMute(); } };

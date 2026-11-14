@@ -119,7 +119,7 @@ const PAPER = '#efe8d6', INK_D = '#1c1c1a', TAPE = '#4a3826';
 let vuIn = 0, vuOut = 0, lastScene = null, platePat = null;
 
 const clock = () => { const s = Math.floor(played); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
-const statusNow = () => (muted ? 'MUTED · tap here for sound' : statusText);
+const statusNow = () => notice() || statusText;
 function fitText(g, s, w) {
   if (g.measureText(s).width <= w) return s;
   while (s.length > 3 && g.measureText(s + '…').width > w) s = s.slice(0, -1);
@@ -155,7 +155,7 @@ function backHint(g, W, y) {
   const age = performance.now() - showSince;
   if (age > 3500) return;
   g.globalAlpha = clamp01((3500 - age) / 800); g.textAlign = 'center'; g.font = '600 11px ' + FONT; g.fillStyle = DIM;
-  g.fillText(muted ? 'tap for sound · tap again to go back' : 'tap anywhere to go back', W / 2, y);
+  g.fillText(notice() ? 'tap for sound · tap again to go back' : 'tap anywhere to go back', W / 2, y);
   g.globalAlpha = 1;
 }
 function levelBar(g, x, top, bot, v, name) {
@@ -306,13 +306,14 @@ function drawCassetteDeck(g, W, H, dt, bypassed, full) {
     g.fillStyle = glow; g.fillRect(0, 0, W, H);
     g.font = '700 10px ' + FONT; g.fillStyle = DIM; g.textAlign = 'left'; g.fillText('T A P E   L O S S', 20, 26);
   } else {
-    g.font = '600 12px ' + FONT; g.textAlign = 'left'; g.fillStyle = muted || statusWarn ? HOT : INK;
+    g.font = '600 12px ' + FONT; g.textAlign = 'left'; g.fillStyle = notice() || statusWarn ? HOT : INK;
     g.fillText(fitText(g, statusNow(), W >= 600 ? W / 2 - 100 - x0 : W - 2 * pad - 70), x0, 24);
     skinLamps(g, x0, 40, bypassed);
   }
   if (full || W >= 600) drawSticker(g, W / 2 + (full ? 0 : 30), 27, full ? 30 : 24, -0.035);
   const tm = clock(), tx = full ? W - 20 : x1;
   g.textAlign = 'right'; g.font = '600 13px ' + MONO; g.fillStyle = INK; g.fillText(tm, tx, full ? 26 : 24);
+  if (!full) clockGeom = { x: tx - 84, y: 0, w: 100, h: 44 };
   if (playing && !full) { circle(g, tx - g.measureText(tm).width - 9, 20, 3.5); g.fillStyle = HOT; g.fill(); }
 
   const low = full ? clamp(H * 0.27, 110, 300) : clamp(H * 0.37, 150, 232);
@@ -455,6 +456,7 @@ function drawReelDeck(g, W, H, dt, bypassed, full) {
   // the counter, in the gap above where the reels meet
   const chord = Math.sqrt(Math.max(0, R * R - (R - 30) * (R - 30))), cw = Math.min(104, 2 * (sep - chord) - 14);
   if (cw > 44) {
+    if (!full) clockGeom = { x: xC - cw / 2 - 12, y: y0 - 8, w: cw + 24, h: 46 };
     rr(g, xC - cw / 2, y0 + 2, cw, 26, 5); g.fillStyle = '#19191b'; g.fill();
     rr(g, xC - cw / 2 + 3, y0 + 5, cw - 6, 20, 3); g.fillStyle = '#0b0b0c'; g.fill();
     g.font = `600 ${Math.min(13, cw / 6).toFixed(1)}px ${MONO}`; g.textAlign = 'center'; g.fillStyle = playing ? '#f6e7b4' : 'rgba(246,231,180,.6)';
@@ -526,7 +528,7 @@ function drawReelDeck(g, W, H, dt, bypassed, full) {
     return;
   }
   const lampsW = W > 430 ? skinLamps(g, bx1, bt + 20, bypassed, true) : 0;
-  g.font = '600 12px ' + FONT; g.textAlign = 'left'; g.fillStyle = muted || statusWarn ? HOT : INK;
+  g.font = '600 12px ' + FONT; g.textAlign = 'left'; g.fillStyle = notice() || statusWarn ? HOT : INK;
   g.fillText(fitText(g, statusNow(), bx1 - bx0 - lampsW - 16), bx0, bt + 21);
   drawSource(g, bx0, bx1, bt + 30, bt + 30 + 44);
   drawAudio(g, bx0, bx1, bt + 30 + 44 + 12, H - 16, bypassed);
