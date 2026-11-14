@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tape Loss">
+<meta name="theme-color" content="#151516">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-180.png">
+<title>Tape Loss · MK IV</title>
+<link rel="stylesheet" href="style.css?v=5">
+</head>
+<body>
+<main class="app" id="app">
+
+  <!-- top bar: what goes in, transport, the sound, and the display switch -->
+  <header class="bar">
+    <div class="brand">
+      <h1>Tape Loss</h1>
+      <p>warble mk IV</p>
+    </div>
+    <div class="seg src" id="src" role="radiogroup" aria-label="Source">
+      <button type="button" role="radio" data-src="live" aria-checked="false" data-help="Live: whatever is plugged in passes straight through the effect.">Live</button>
+      <button type="button" role="radio" data-src="loop" aria-checked="false" data-help="Loop: record a stretch of the input with Rec. It loops, and you play the effect over it.">Loop</button>
+      <button type="button" role="radio" data-src="file" aria-checked="true" data-help="File: an audio file, looping. It starts with a built-in demo loop.">File</button>
+    </div>
+    <div class="transport" aria-label="Transport">
+      <button type="button" class="tkey wide" id="play" aria-pressed="false" data-help="Start or stop the sound.">
+        <span class="face"><span class="ico ico-play"></span></span><span class="name" id="play-label">Play</span>
+      </button>
+      <button type="button" class="tkey" id="rec" aria-pressed="false" data-help="Record the input into the loop, up to 30 seconds. Press again to stop; it starts looping at once.">
+        <span class="face"><span class="ico ico-rec"></span></span><span class="name">Rec</span>
+      </button>
+      <button type="button" class="tkey" id="bypass" aria-pressed="false" data-help="Bypass: hear the sound with the effect out of the way.">
+        <span class="face"><span class="ico ico-bypass"></span></span><span class="name">Bypass</span>
+      </button>
+    </div>
+    <div class="browser" aria-label="Sound">
+      <button type="button" class="key-btn nav" id="preset-prev" aria-label="Previous preset" data-help="Previous preset.">‹</button>
+      <select id="preset" aria-label="Preset" data-help="Presets: the factory list, four of your own, and saving what you have now into one of them."></select>
+      <button type="button" class="key-btn nav" id="preset-next" aria-label="Next preset" data-help="Next preset.">›</button>
+      <div class="seg ab" id="ab" role="radiogroup" aria-label="Compare two settings" data-help="A and B hold two settings of every knob. Switch to compare; edits go to whichever is lit.">
+        <button type="button" role="radio" data-ab="A" aria-checked="true">A</button>
+        <button type="button" role="radio" data-ab="B" aria-checked="false">B</button>
+      </div>
+      <button type="button" class="key-btn nav" id="undo" aria-label="Undo" data-help="Undo the last change.">↶</button>
+      <button type="button" class="key-btn nav" id="redo" aria-label="Redo" data-help="Redo.">↷</button>
+    </div>
+    <div class="tools">
+      <button type="button" class="key-btn" id="load" data-help="Load an audio file. It becomes the File source.">Load</button>
+      <button type="button" class="key-btn toggle" id="thru" aria-pressed="false" data-help="Thru: keep the live input sounding while the loop plays, so you can play over it.">Thru</button>
+      <button type="button" class="key-btn" id="save" data-help="Save a WAV of the loop or file played through the effect as it is set now.">Save WAV</button>
+      <button type="button" class="key-btn" id="skin" data-help="Skin: three faces for the same effect. Unit, Cassette (a tape box with long faders) and Reel (a reel-to-reel deck). Tap to change.">Unit</button>
+      <button type="button" class="key-btn" id="show" data-help="Display: the tape, full screen, moving to the sound. Tap it to come back.">Display</button>
+    </div>
+  </header>
+
+  <!-- the screen, and beside it the effect: a chain of sections and the controls of the one in hand -->
+  <section class="stage">
+    <div class="side left" id="side-left" aria-label="Faders and scenes"></div>
+    <div class="screen" id="screen" data-help="The window. Drag the loop's two ends to set where it loops; pull the dots under them inward to fade the loop in and out. Double-tap the dots to clear the fades.">
+      <canvas id="deck" aria-label="The tape: reels, loop, sound and motion"></canvas>
+      <p class="sr" id="status" aria-live="polite"></p>
+    </div>
+    <aside class="panel" aria-label="Effect">
+      <div class="chain" id="chain" role="tablist" aria-label="Sections"></div>
+      <div class="pages" id="pages"></div>
+    </aside>
+    <div class="side right" id="side-right" aria-label="Faders and sections"></div>
+  </section>
+
+  <footer class="foot">
+    <div class="pads" id="pads" aria-label="Hold pads"></div>
+    <button type="button" class="key-btn toggle" id="latch" aria-pressed="false" data-help="Latch, three ways. Off: a pad works while you hold it. On: a tap switches it on, another tap switches it off. Smooth: the same, but the effect glides in and out.">Latch<small id="latch-state">off</small></button>
+  </footer>
+
+  <p class="helpline" id="help"></p>
+  <input type="file" id="file" accept="audio/*" hidden>
+</main>
+
+<script src="dsp/tape-processor.js?v=5"></script>
+<script src="app.js?v=5"></script>
+<script src="skins.js?v=5"></script>
+<script>
+  // on the hosted copy only: keep the app available offline (see sw.js)
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>

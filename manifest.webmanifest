@@ -1,0 +1,15 @@
+{
+  "name": "Tape Loss",
+  "short_name": "Tape Loss",
+  "description": "A lo-fi tape effect: wow, flutter, loss, grains and reverb, for a live input, a loop or a file.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#151516",
+  "theme_color": "#151516",
+  "icons": [
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
