@@ -151,8 +151,10 @@ body[data-src="live"] #save { display: none; }
 .knob.pushed .val { stroke: var(--accent); }
 .knob.pushed output { color: var(--accent); font-weight: 700; }
 .limiter { align-self: center; justify-self: center; }
-.opts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
-.opts .legend { margin: 0; }
+/* Master's two switches sit together in the space beside the last knobs: the limiter, and how Rec starts */
+.switches { grid-column: span 2; display: grid; justify-items: center; align-content: center; gap: 8px; min-width: 0; }
+.recmode button { min-height: 36px; padding: 0 7px; font-size: 11.5px; }
+.recmode button[aria-checked="true"] { color: var(--accent); }
 
 /* ── pads ─────────────────────────────────────────────────────────────────────────────────────── */
 .foot { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: stretch; padding: 0 5px; }
@@ -179,6 +181,13 @@ body.show .stage { grid-template-columns: minmax(0, 1fr); }
 body.show .screen { margin: 0; border-radius: 0; box-shadow: none; }
 
 /* ── smaller and upright screens ──────────────────────────────────────────────────────────────── */
+/* a smaller iPad (1024 wide): four knobs still fit across, so no page of knobs needs scrolling */
+@media (max-width: 1100px) {
+  .knobs { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 4px 2px; }
+  .knob svg { width: 58px; height: 58px; }
+  .knob.small svg { width: 46px; height: 46px; }
+  .recmode button { padding: 0 5px; font-size: 10.5px; }
+}
 @media (max-height: 700px) {
   .pad, #latch { min-height: 56px; }
   .knob svg { width: 58px; height: 58px; }

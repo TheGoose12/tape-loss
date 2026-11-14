@@ -348,23 +348,24 @@ for (const g of GROUPS) {
     limiterBtn.type = 'button'; limiterBtn.className = 'key-btn toggle limiter'; limiterBtn.textContent = 'Limiter';
     limiterBtn.dataset.help = 'Limiter: a safety net on the very end, so the output never clips.';
     limiterBtn.addEventListener('click', () => setValue('limit', values.limit > .5 ? 0 : 1));
-    k.appendChild(limiterBtn);
+    // beside it, how Rec starts: the moment you press it, or armed and waiting for the first sound
+    const seg = document.createElement('div');
+    seg.className = 'seg recmode'; seg.id = 'rec-mode'; seg.setAttribute('role', 'radiogroup'); seg.setAttribute('aria-label', 'How Rec starts');
+    seg.dataset.help = 'Rec instant: recording starts the moment you press Rec. Rec on sound: Rec arms, and recording starts by itself with the first sound that comes in.';
+    seg.innerHTML = '<button type="button" role="radio" data-wait="0">Rec instant</button><button type="button" role="radio" data-wait="1">Rec on sound</button>';
+    const showMode = () => seg.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', (b.dataset.wait === '1') === recWait));
+    seg.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      recWait = b.dataset.wait === '1'; showMode();
+      try { localStorage.setItem('tapeloss.recwait', recWait ? '1' : '0'); } catch (_) {}
+      say(recWait ? 'Rec will wait for the first sound' : 'Rec starts the moment you press it');
+    });
+    showMode();
+    const sw = document.createElement('div'); sw.className = 'switches';
+    sw.append(limiterBtn, seg);
+    k.appendChild(sw);
   }
   body.appendChild(k);
-  if (g.id === 'master') {                // options live at the bottom of Master, out of the way
-    const o = document.createElement('div'); o.className = 'opts';
-    o.innerHTML = '<span class="legend">Options</span>';
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'key-btn toggle'; b.id = 'rec-wait'; b.textContent = 'Rec waits for sound';
-    b.dataset.help = 'On: Rec arms and starts by itself the moment sound comes in. Off: Rec starts the moment you press it.';
-    b.setAttribute('aria-pressed', recWait);
-    b.addEventListener('click', () => {
-      recWait = !recWait; b.setAttribute('aria-pressed', recWait);
-      try { localStorage.setItem('tapeloss.recwait', recWait ? '1' : '0'); } catch (_) {}
-      say(recWait ? 'Rec will wait for sound' : 'Rec starts the moment you press it');
-    });
-    o.appendChild(b); body.appendChild(o);
-  }
   p.append(head, body);
   pages[g.id] = p; $('#pages').appendChild(p);
 }
