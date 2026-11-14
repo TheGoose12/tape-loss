@@ -98,7 +98,7 @@ body[data-src="live"] #save { display: none; }
 }
 #deck { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 
-.panel { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 0; min-height: 0; padding: 5px 5px 5px 0; }
+.panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 0; min-height: 0; padding: 5px 5px 5px 0; }
 /* the chain: a tile per section, each with its lamp and a small live display */
 .chain { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; position: relative; z-index: 1; }
 .tile {
@@ -151,9 +151,10 @@ body[data-src="live"] #save { display: none; }
 .knob.pushed .val { stroke: var(--accent); }
 .knob.pushed output { color: var(--accent); font-weight: 700; }
 .limiter { align-self: center; justify-self: center; }
-/* Master's two switches sit together in the space beside the last knobs: the limiter, and how Rec starts */
-.switches { grid-column: span 2; display: grid; justify-items: center; align-content: center; gap: 8px; min-width: 0; }
-.recmode button { min-height: 36px; padding: 0 7px; font-size: 11.5px; }
+/* how Rec starts: a strip of its own under the pages, the same whichever section is open */
+.recbar { margin-top: 6px; }
+.recmode { display: flex; width: 100%; }
+.recmode button { flex: 1 1 0; min-height: 36px; padding: 0 6px; font-size: 12px; }
 .recmode button[aria-checked="true"] { color: var(--accent); }
 
 /* ── pads ─────────────────────────────────────────────────────────────────────────────────────── */
@@ -186,7 +187,6 @@ body.show .screen { margin: 0; border-radius: 0; box-shadow: none; }
   .knobs { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 4px 2px; }
   .knob svg { width: 58px; height: 58px; }
   .knob.small svg { width: 46px; height: 46px; }
-  .recmode button { padding: 0 5px; font-size: 10.5px; }
 }
 @media (max-height: 700px) {
   .pad, #latch { min-height: 56px; }
@@ -228,6 +228,7 @@ body.plate .tile .mini {
   box-shadow: 0 0 0 1px #000, inset 0 3px 6px rgba(0, 0, 0, .8), 0 1px 0 1px rgba(255, 255, 255, .16);
 }
 body.plate .pages { margin-top: 8px; }
+body.plate .recbar { margin-top: 8px; }
 body.plate .page { border: 0; padding: 10px 8px; background: rgba(0, 0, 0, .1); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .3), 0 1px 0 rgba(255, 255, 255, .25); }
 body.plate .page > header { padding: 0 2px; }
 body.plate .power { border-color: var(--line); color: var(--ink); background: linear-gradient(180deg, var(--key-a), var(--key-b)); box-shadow: 0 2px 0 var(--key-edge); }

@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" type="image/png" href="icon-180.png">
 <title>Tape Loss · MK IV</title>
-<link rel="stylesheet" href="style.css?v=9">
+<link rel="stylesheet" href="style.css?v=10">
 </head>
 <body>
 <main class="app" id="app">
@@ -69,6 +69,7 @@
     <aside class="panel" aria-label="Effect">
       <div class="chain" id="chain" role="tablist" aria-label="Sections"></div>
       <div class="pages" id="pages"></div>
+      <div class="recbar" id="recbar"></div>
     </aside>
     <div class="side right" id="side-right" aria-label="Faders and sections"></div>
   </section>
@@ -82,9 +83,9 @@
   <input type="file" id="file" accept="audio/*" hidden>
 </main>
 
-<script src="dsp/tape-processor.js?v=9"></script>
-<script src="app.js?v=9"></script>
-<script src="skins.js?v=9"></script>
+<script src="dsp/tape-processor.js?v=10"></script>
+<script src="app.js?v=10"></script>
+<script src="skins.js?v=10"></script>
 <script>
   // on the hosted copy only: keep the app available offline (see sw.js)
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
