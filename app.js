@@ -649,7 +649,10 @@ function describe() {
 async function setSource(s) {
   source = s;
   document.body.dataset.src = s;
-  if (playing) await play(); else { say(describe()); syncUI(); }
+  // Live, and Loop before anything is recorded, are about what is coming in: start listening at once, so
+  // the input shows on the screen (and through the effect) without a second press
+  const listen = s === 'live' || (s === 'loop' && !tape.loop.buf);
+  if (playing || listen) await play(); else { say(describe()); syncUI(); }
 }
 
 // Record: the clean input, up to 30 s, into the loop. It starts looping the moment you stop.
