@@ -27,8 +27,8 @@ button:focus-visible, select:focus-visible, .knob:focus-visible { outline: 2px s
 
 /* the unit fills the screen: bar, stage, pads, help line */
 .app {
-  height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; gap: 8px;
-  padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 8px;
+  padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(20px, calc(env(safe-area-inset-bottom) + 8px)) max(10px, env(safe-area-inset-left));
   background: linear-gradient(180deg, var(--plate-hi), var(--plate) 30%, var(--plate-lo));
 }
 .app.dragging { outline: 3px dashed var(--accent); outline-offset: -6px; }
@@ -165,11 +165,9 @@ body[data-src="live"] #save { display: none; }
 #latch small { font-size: 8.5px; letter-spacing: .16em; color: var(--ink-2); }
 #latch[aria-pressed="true"] small { color: var(--accent); }
 
-.helpline {
-  margin: 0 5px; padding: 7px 12px; min-height: 30px; border-radius: 8px; font-size: 12px; line-height: 1.35;
-  background: var(--glass); color: rgba(241, 239, 232, .82); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  box-shadow: 0 0 0 1px #000, 0 0 0 3px var(--plate-lo), 0 0 0 4px var(--line);
-}
+/* The help line is not shown: the unit is hardware, the words belong in a manual. The text is still kept
+   up to date for screen readers, and the space under the pads is left as plain plate. */
+.helpline { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
 
 /* ── Display: the tape, full screen ───────────────────────────────────────────────────────────── */
 body.show .bar, body.show .panel, body.show .foot, body.show .helpline { display: none; }
@@ -184,14 +182,13 @@ body.show .screen { margin: 0; border-radius: 0; box-shadow: none; }
 }
 @media (orientation: portrait), (max-width: 820px) {
   html, body { overflow: auto; }
-  .app { height: auto; min-height: 100dvh; grid-template-rows: auto auto auto auto; }
+  .app { height: auto; min-height: 100dvh; grid-template-rows: auto auto auto; }
   .stage { grid-template-columns: minmax(0, 1fr); }
   .screen { height: 46vh; min-height: 300px; }
   .panel { padding: 0 5px; }
   .page { height: auto; }
   .page .body { overflow: visible; }
   .pads { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .helpline { white-space: normal; }
   body.show .screen { height: 100dvh; }
 }
 @media (prefers-reduced-motion: reduce) { #rec[aria-pressed="true"] .ico-rec { animation: none; } }

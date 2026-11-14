@@ -473,9 +473,40 @@ hist.last = snap(); histSync();
 // loop, or a file. In Loop, the live input can stay on over the loop (Thru).
 const REC_MAX = 30;
 
+// iPad and iPhone. Two things keep a web page silent there, and both are handled from the tap itself,
+// before anything is awaited:
+//  1. Silent Mode mutes Web Audio unless the page says it is playing media. Newer systems let the page
+//     say so (navigator.audioSession); on older ones a silent, looping <audio> element does the same job.
+//  2. The audio engine starts, or comes back from an interruption, suspended until a tap resumes it.
+let silentEl = null;
+function audioSessionFor(live) {
+  try { if (navigator.audioSession) navigator.audioSession.type = live ? 'play-and-record' : 'playback'; } catch (_) {}
+}
+function unlockAudio() {
+  const appleTouch = navigator.maxTouchPoints > 1 && /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Android/.test(navigator.userAgent);
+  if (appleTouch && !navigator.audioSession) {
+    if (!silentEl) {
+      const n = 2000, v = new DataView(new ArrayBuffer(44 + n * 2));           // a quarter second of silence, 8 kHz mono
+      const str = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+      str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+      v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, 8000, true); v.setUint32(28, 16000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+      str(36, 'data'); v.setUint32(40, n * 2, true);
+      silentEl = new Audio(URL.createObjectURL(new Blob([v], { type: 'audio/wav' })));
+      silentEl.loop = true; silentEl.setAttribute('playsinline', '');
+    }
+    if (silentEl.paused) silentEl.play().catch(() => {});
+  }
+  if (ctx && ctx.state !== 'running') ctx.resume().catch(() => {});
+}
+// any tap while it should be sounding brings a suspended or interrupted engine back
+document.addEventListener('pointerdown', () => { if (playing && ctx && ctx.state !== 'running') unlockAudio(); }, true);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && playing && ctx && ctx.state !== 'running') ctx.resume().catch(() => {}); });
+
 async function ensureAudio() {
-  if (ctx) { if (ctx.state === 'suspended') await ctx.resume(); return; }
+  if (ctx) { if (ctx.state !== 'running') ctx.resume().catch(() => {}); return; }
   ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+  ctx.resume().catch(() => {});                 // still inside the tap that asked for sound
   await ctx.audioWorklet.addModule('dsp/tape-processor.js');
   node = new AudioWorkletNode(ctx, 'tape-warble', {
     numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit',
@@ -568,6 +599,7 @@ const wantLive = () => source === 'live' || (source === 'loop' && (!tape.loop.bu
 
 async function play() {
   try {
+    audioSessionFor(wantLive()); unlockAudio();
     await ensureAudio();
     if (wantLive()) {
       try { await openLive(); }
@@ -576,6 +608,7 @@ async function play() {
     startBuf();
     playing = true;
     say(describe());
+    setTimeout(() => { if (playing && ctx.state !== 'running') say('No sound yet: tap the screen once', true); }, 700);
   } catch (err) {
     playing = false; closeLive();
     say('Audio failed to start: ' + err.message, true);
@@ -602,6 +635,7 @@ async function setSource(s) {
 // Record: the clean input, up to 30 s, into the loop. It starts looping the moment you stop.
 async function toggleRec() {
   if (rec) { node.port.postMessage({ rec: null }); return; }
+  audioSessionFor(true); unlockAudio();
   try { await ensureAudio(); } catch (err) { say('Audio failed to start: ' + err.message, true); return; }
   if (source !== 'loop') { source = 'loop'; document.body.dataset.src = 'loop'; }
   rec = { L: [], R: [], len: 0, t0: 0 };
