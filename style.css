@@ -83,6 +83,7 @@ body[data-src="live"] #save { display: none; }
 .ico-rec { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); }
 #rec[aria-pressed="true"] .ico-rec { animation: blink .8s steps(2) infinite; }
 #rec:disabled { opacity: .35; }
+#rec.armed .ico-rec { background: none; box-shadow: inset 0 0 0 3px var(--accent); animation-duration: 1.1s; }
 .ico-bypass { width: 20px; height: 9px; border: 2.5px solid var(--ink); border-bottom: 0; border-radius: 10px 10px 0 0; }
 #bypass[aria-pressed="true"] .ico-bypass { border-color: var(--accent); }
 @keyframes blink { 50% { opacity: .35; } }
@@ -150,6 +151,8 @@ body[data-src="live"] #save { display: none; }
 .knob.pushed .val { stroke: var(--accent); }
 .knob.pushed output { color: var(--accent); font-weight: 700; }
 .limiter { align-self: center; justify-self: center; }
+.opts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.opts .legend { margin: 0; }
 
 /* ── pads ─────────────────────────────────────────────────────────────────────────────────────── */
 .foot { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: stretch; padding: 0 5px; }

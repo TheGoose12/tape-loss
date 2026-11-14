@@ -775,12 +775,18 @@ if (typeof registerProcessor === 'function') {
       this.silence = new Float32Array(128);
       this.scratch = new Float32Array(128);
       this.blocks = 0;
-      // recorder: copies the input ('in') or the finished output ('out') and posts it to the page in chunks
+      // recorder: copies the input ('in') or the finished output ('out') and posts it to the page in chunks.
+      // With `wait` (a level, 0..1) it holds off until the sound first passes that level, then starts with
+      // the 30 ms before it, so the attack is whole, and tells the page with { recStarted }.
       this.rec = null;
       this.port.onmessage = e => {
         const m = e.data;
         if (!m || !('rec' in m)) return;
-        if (m.rec) this.rec = { mode: m.rec, left: Math.round(sampleRate * (m.max || 15)), L: new Float32Array(4096), R: new Float32Array(4096), n: 0 };
+        if (m.rec) {
+          const P = Math.round(sampleRate * 0.03);
+          this.rec = { mode: m.rec, left: Math.round(sampleRate * (m.max || 15)), L: new Float32Array(4096), R: new Float32Array(4096), n: 0,
+            wait: m.wait > 0 ? m.wait : 0, pre: m.wait > 0 ? { L: new Float32Array(P), R: new Float32Array(P), pos: 0, fill: 0 } : null };
+        }
         else this.endRec();
       };
     }
@@ -802,11 +808,30 @@ if (typeof registerProcessor === 'function') {
       const r = this.rec;
       if (r) {
         const sL = r.mode === 'in' ? inL : out[0], sR = r.mode === 'in' ? inR : (out[1] || out[0]);
-        for (let i = 0; i < n && r.left > 0; i++, r.left--) {
-          r.L[r.n] = sL[i]; r.R[r.n] = sR[i];
-          if (++r.n >= 4096) this.flushRec();
+        let i = 0;
+        if (r.wait > 0) {                       // waiting for sound: remember the last moment, watch the level
+          const p = r.pre, P = p.L.length;
+          for (; i < n; i++) {
+            if (Math.abs(sL[i]) > r.wait || Math.abs(sR[i]) > r.wait) break;
+            p.L[p.pos] = sL[i]; p.R[p.pos] = sR[i]; p.pos = (p.pos + 1) % P; if (p.fill < P) p.fill++;
+          }
+          if (i < n) {
+            for (let k = p.fill; k > 0; k--) {
+              const q = (p.pos - k + P) % P;
+              r.L[r.n] = p.L[q]; r.R[r.n] = p.R[q];
+              if (++r.n >= 4096) this.flushRec();
+            }
+            r.wait = 0; r.pre = null;
+            this.port.postMessage({ recStarted: true });
+          }
         }
-        if (r.left <= 0) this.endRec();
+        if (r.wait <= 0) {
+          for (; i < n && r.left > 0; i++, r.left--) {
+            r.L[r.n] = sL[i]; r.R[r.n] = sR[i];
+            if (++r.n >= 4096) this.flushRec();
+          }
+          if (r.left <= 0) this.endRec();
+        }
       }
       if (++this.blocks >= 4) { this.blocks = 0; this.port.postMessage(core.readMeter()); }
       return true;

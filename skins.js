@@ -127,7 +127,7 @@ function fitText(g, s, w) {
 }
 const LAMP_NAMES = ['PLAY', 'REC', 'DROP', 'FREEZE', 'LIMIT', 'BYPASS'];
 function skinLamps(g, x, y, bypassed, right) {
-  const on = [playing && reelSpeed > 0.05, !!rec, dropVis > 0.15, frozen, gr < 0.985, bypassed], hot = [0, 1, 1, 0, 1, 0];
+  const on = [playing, !!rec, dropVis > 0.15, frozen, gr < 0.985, bypassed], hot = [0, 1, 1, 0, 1, 0];
   g.font = '600 9px ' + FONT; g.textAlign = 'left';
   let w = -8; for (const n of LAMP_NAMES) w += g.measureText(n).width + 8;
   let lx = right ? x - w : x;

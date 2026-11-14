@@ -21,6 +21,10 @@ let liveNode = null, liveStream = null, bufNode = null, bufT0 = 0, bufP0 = 0, bu
 // ls, le: where the loop starts and ends, in seconds. fi, fo: how long it fades in after the start and out before the end.
 const tape = { file: { buf: null, title: 'Demo loop', ls: 0, le: 0, fi: 0, fo: 0, peaks: null }, loop: { buf: null, title: 'Loop', ls: 0, le: 0, fi: 0, fo: 0, peaks: null } };
 const meters = [];
+// Rec can wait for sound: armed, it starts the moment the input passes REC_LEVEL (about -36 dB), like auto sampling on a sampler
+const REC_LEVEL = 0.016;
+let recWait = true;
+try { recWait = localStorage.getItem('tapeloss.recwait') !== '0'; } catch (_) {}
 let statusText = 'Press Play', statusWarn = false;
 // quiet when testing: 127.0.0.1 or ?mute runs the audio but sends silence to the speakers; a tap on the screen unmutes
 let muted = location.hostname === '127.0.0.1' || new URLSearchParams(location.search).has('mute');
@@ -347,6 +351,20 @@ for (const g of GROUPS) {
     k.appendChild(limiterBtn);
   }
   body.appendChild(k);
+  if (g.id === 'master') {                // options live at the bottom of Master, out of the way
+    const o = document.createElement('div'); o.className = 'opts';
+    o.innerHTML = '<span class="legend">Options</span>';
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'key-btn toggle'; b.id = 'rec-wait'; b.textContent = 'Rec waits for sound';
+    b.dataset.help = 'On: Rec arms and starts by itself the moment sound comes in. Off: Rec starts the moment you press it.';
+    b.setAttribute('aria-pressed', recWait);
+    b.addEventListener('click', () => {
+      recWait = !recWait; b.setAttribute('aria-pressed', recWait);
+      try { localStorage.setItem('tapeloss.recwait', recWait ? '1' : '0'); } catch (_) {}
+      say(recWait ? 'Rec will wait for sound' : 'Rec starts the moment you press it');
+    });
+    o.appendChild(b); body.appendChild(o);
+  }
   p.append(head, body);
   pages[g.id] = p; $('#pages').appendChild(p);
 }
@@ -515,6 +533,7 @@ async function ensureAudio() {
     const d = e.data;
     if (d.recChunk) { if (rec) { rec.L.push(d.recChunk[0]); rec.R.push(d.recChunk[1]); rec.len += d.recChunk[0].length; } }
     else if (d.recDone) recDone();
+    else if (d.recStarted) { if (rec) { rec.armed = false; rec.t0 = ctx.currentTime; say('Recording the input…'); syncUI(); } }
     else { meters.push(d); if (meters.length > 400) meters.splice(0, 200); }
   };
   analyser = ctx.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0.72;
@@ -638,18 +657,23 @@ async function toggleRec() {
   audioSessionFor(true); unlockAudio();
   try { await ensureAudio(); } catch (err) { say('Audio failed to start: ' + err.message, true); return; }
   if (source !== 'loop') { source = 'loop'; document.body.dataset.src = 'loop'; }
-  rec = { L: [], R: [], len: 0, t0: 0 };
+  rec = { L: [], R: [], len: 0, t0: 0, armed: recWait };
   stopBuf();
   try { await openLive(); } catch (err) { rec = null; say('Could not open the audio input: ' + err.message, true); syncUI(); return; }
   playing = true;
   rec.t0 = ctx.currentTime;
-  node.port.postMessage({ rec: 'in', max: REC_MAX });
-  say('Recording the input…');
+  node.port.postMessage({ rec: 'in', max: REC_MAX, wait: recWait ? REC_LEVEL : 0 });
+  say(recWait ? 'Waiting for sound: play something, or press Rec to cancel' : 'Recording the input…');
   syncUI();
 }
 function recDone() {
   const r = rec; rec = null;
-  if (!r || r.len < ctx.sampleRate * 0.15) { say('That was too short to keep'); syncUI(); return; }
+  if (!r || r.len < ctx.sampleRate * 0.15) {          // nothing worth keeping: go back to the loop there was
+    say(r && r.armed ? 'Recording cancelled' : 'That was too short to keep');
+    if (!wantLive()) closeLive();
+    if (playing && tape.loop.buf) startBuf();
+    syncUI(); return;
+  }
   const buf = ctx.createBuffer(2, r.len, ctx.sampleRate), bl = buf.getChannelData(0), br = buf.getChannelData(1);
   for (let k = 0, o = 0; k < r.L.length; o += r.L[k].length, k++) { bl.set(r.L[k], o); br.set(r.R[k], o); }
   const f = Math.min(Math.round(ctx.sampleRate * 0.006), r.len >> 1);       // 6 ms fades, so the loop seam does not click
@@ -711,6 +735,7 @@ function syncUI() {
   $('#play-label').textContent = playing ? 'Stop' : 'Play';
   $('#play').setAttribute('aria-pressed', playing);
   $('#rec').setAttribute('aria-pressed', !!rec);
+  $('#rec').classList.toggle('armed', !!(rec && rec.armed));
   $('#thru').setAttribute('aria-pressed', thru);
   document.querySelectorAll('#src button').forEach(b => b.setAttribute('aria-checked', b.dataset.src === source));
   document.body.dataset.src = source;
@@ -843,7 +868,7 @@ const hCents = new Float32Array(HN), hDrop = new Float32Array(HN).fill(1);   // 
 const revLvl = new Float32Array(5), revPeak = new Float32Array(5), outLvl = new Float32Array(5), outPeak = new Float32Array(5);
 const spec = new Float32Array(BARS);
 let freqData = null, timeData = null;
-let wPos = 0, hPos = 0, reelAngle = 0, reelSpeed = 0, cents = 0, tilt = 0, dropGain = 1, dropVis = 0;
+let wPos = 0, hPos = 0, reelAngle = 0, reelSpeed = 0, quiet = 0, cents = 0, tilt = 0, dropGain = 1, dropVis = 0;
 let peakIn = 0, peakOut = 0, tapeLvl = 0, gr = 1, frozen = false, grains = null, range = 25, lastT = 0, played = 0, loud = 0, showSince = 0;
 
 function fit(cv) {
@@ -915,6 +940,15 @@ function drawSource(g, x0, x1, top, bot) {
   const t = curTape(), w = x1 - x0;
   g.textBaseline = 'alphabetic'; g.font = '600 9px ' + FONT; g.fillStyle = DIM; g.textAlign = 'left';
   srcGeom = null;
+  if (rec && rec.armed) {                             // armed: the input level, with the mark it has to pass
+    const y = (top + 13 + bot) / 2, lvl = v => clamp01((20 * Math.log10(Math.max(v, 1e-4)) + 60) / 60);
+    g.fillStyle = Math.floor(performance.now() / 450) % 2 ? HOT : 'rgba(240,78,35,.45)'; g.fillText('WAITING FOR SOUND', x0, top + 8);
+    g.textAlign = 'right'; g.fillStyle = DIM; g.fillText('STARTS WHEN THE LEVEL PASSES THE MARK', x1, top + 8);
+    g.fillStyle = FAINT; g.fillRect(x0, y - 4, w, 8);
+    g.fillStyle = INK; g.fillRect(x0, y - 4, w * lvl(peakIn), 8);
+    g.fillStyle = HOT; g.fillRect(x0 + w * lvl(REC_LEVEL) - 1, y - 9, 2, 18);
+    return;
+  }
   if (rec) {
     const el = ctx.currentTime - rec.t0;
     g.fillStyle = HOT; g.fillText(`RECORDING ${el.toFixed(1)} / ${REC_MAX} S`, x0, top + 8);
@@ -1032,7 +1066,7 @@ function drawWork(g, W, H, dt, bypassed) {
   let st = muted ? 'MUTED · tap here for sound' : statusText; const full = st;
   while (st.length > 4 && g.measureText(st).width > lx1 - x0) st = st.slice(0, -2);
   g.fillText(st === full ? st : st + '…', x0, 24);
-  const lamps = [['PLAY', playing && reelSpeed > 0.05], ['REC', !!rec, 1], ['DROP', dropVis > 0.15, 1], ['FREEZE', frozen], ['LIMIT', gr < 0.985, 1], ['BYPASS', bypassed]];
+  const lamps = [['PLAY', playing], ['REC', !!rec, 1], ['DROP', dropVis > 0.15, 1], ['FREEZE', frozen], ['LIMIT', gr < 0.985, 1], ['BYPASS', bypassed]];
   g.font = '600 9px ' + FONT;
   let lx = x0;
   for (const [name, on, hot] of lamps) { if (!on && lx + g.measureText(name).width > lx1) break; g.fillStyle = on ? (hot ? HOT : INK) : FAINT; g.fillText(name, lx, 40); lx += g.measureText(name).width + 8; }
@@ -1222,7 +1256,11 @@ function draw(now) {
   if (!playing) { speed = 0; cents = 0; dropGain = 1; peakIn *= 0.9; peakOut *= 0.9; tapeLvl *= 0.9; grains = null; for (let i = 0; i < 5; i++) { revLvl[i] *= 0.9; outLvl[i] *= 0.9; } }
   gr = Math.min(grNow, gr + (1 - gr) * Math.min(1, dt * 6));
   const bypassed = values.bypass > 0.5, show = document.body.classList.contains('show');
-  reelSpeed += (Math.max(0, speed) - reelSpeed) * Math.min(1, dt * 14);
+  // The tape moves only while there is sound: when what comes in falls silent (and nothing loud is still
+  // ringing out) the reels coast to a stop, and they spin up again with the next sound.
+  if (peakIn > 0.002 || peakOut > 0.02) quiet = 0; else quiet += dt;
+  const reelTarget = playing && quiet < 0.7 ? Math.max(0, speed) : 0;
+  reelSpeed += (reelTarget - reelSpeed) * Math.min(1, dt * (reelTarget > reelSpeed ? 9 : 3));
   reelAngle += dt * 1.9 * reelSpeed * (source === 'live' ? 1 : bufRate);
   played += dt * reelSpeed;
   tilt += ((bypassed ? 0 : clamp(cents / 60, -1, 1)) - tilt) * Math.min(1, dt * 10);
