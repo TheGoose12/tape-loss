@@ -21,6 +21,11 @@
  *   mix:       dry/wet
  *   master:    low cut → tone tilt → width → glue compressor → output gain → limiter
  *   bypass crossfade
+ *
+ * Two engines, chosen by the `hq` switch. Classic is the path above at the sample rate. HQ does the same
+ * things with less digital residue: the saturator runs at 4× the sample rate, the tape is kept at 2×,
+ * grains that are pitched up read band-limited copies of their tape, and the dry signal is delayed to
+ * stay in step with the wet one. With `hq` off none of that code runs and the output is the classic one.
  */
 
 const TWO_PI = Math.PI * 2;
@@ -79,6 +84,7 @@ const PARAM_DEFS = [
   { id: 'drop',     label: 'Dropout',   group: 'switch', min: 0, max: 1, def: 0 },   // held: tape off the head
   { id: 'freeze',   label: 'Freeze',    group: 'switch', min: 0, max: 1, def: 0 },   // held: grains loop what they have
   { id: 'limit',    label: 'Limiter',   group: 'switch', min: 0, max: 1, def: 1 },
+  { id: 'hq',       label: 'HQ engine', group: 'switch', min: 0, max: 1, def: 1 },   // which engine: see the top of this file
 
   // one on/off per section; off sends that section's knobs to their neutral ("off") values
   { id: 'onMotion', label: 'Motion on', group: 'switch', min: 0, max: 1, def: 1 },
@@ -150,6 +156,91 @@ const MAX_GRAINS = 48;
 const GRAIN_LOOP = 6;        // seconds of grain tape that Position and Scan travel over
 const SCATTER = [12, -12, 7, 19, -5, 24, -24];   // semitone jumps Scatter can pick: octaves and fifths, so it stays in key
 const KAP = 0.7;             // reverb diffusion
+
+// ── HQ engine: the pieces ────────────────────────────────────────────────────────────────────────
+const OS_LATENCY = 28;                    // samples the 4× saturator's filters take: (47 − 1) / 2 + (21 − 1) / 4
+const HQ_DRY = MIN_DELAY + OS_LATENCY;    // so the dry signal waits this long, and Mix stays phase-true
+// band-limited copies of the grain tape: [filter order, pass-band edge as a fraction of the sample rate].
+// A grain played r times faster reads the first copy from r = 1.6, the second from 2.5, the third from 3.5.
+const MIPS = [[6, 0.2], [4, 0.14], [4, 0.1]];
+
+function bessel0(x) { let sum = 1, t = 1; for (let k = 1; k < 40; k++) { t *= (x / (2 * k)) * (x / (2 * k)); sum += t; } return sum; }
+/** A Kaiser-windowed low-pass of N taps (N odd), cut-off fc as a fraction of the sample rate. */
+function kaiserLowpass(N, fc, beta) {
+  const h = new Float64Array(N), M = (N - 1) / 2, b0 = bessel0(beta);
+  for (let n = 0; n < N; n++) {
+    const k = n - M, r = k / M;
+    h[n] = (k === 0 ? 2 * fc : Math.sin(TWO_PI * fc * k) / (Math.PI * k)) * bessel0(beta * Math.sqrt(1 - r * r)) / b0;
+  }
+  return h;
+}
+/** One ×2 step of the oversampler, built on a linear-phase low-pass h. up() turns one sample into two
+ *  (a, then b); push() and out() run the same filter over the fast samples, to come back down (out() after
+ *  the first of each pair) or just to band-limit them. Taps that are zero (half of them) are skipped. */
+class Stage2 {
+  constructor(h) {
+    let se = 0, so = 0;
+    for (let k = 0; k < h.length; k++) if (k & 1) so += h[k]; else se += h[k];
+    const eI = [], eC = [], oI = [], oC = [], dI = [], dC = [];
+    for (let k = 0; k < h.length; k++) {
+      const c = h[k] / (k & 1 ? so : se);            // each of the two phases passes DC at exactly 1
+      if (Math.abs(c) < 1e-9) continue;
+      if (k & 1) { oI.push(k >> 1); oC.push(c); } else { eI.push(k >> 1); eC.push(c); }
+      dI.push(k); dC.push(c * 0.5);
+    }
+    this.eI = Int32Array.from(eI); this.eC = Float64Array.from(eC);
+    this.oI = Int32Array.from(oI); this.oC = Float64Array.from(oC);
+    this.dI = Int32Array.from(dI); this.dC = Float64Array.from(dC);
+    this.x = new Float64Array(32); this.xi = 0;      // slow samples, for going up
+    this.d = new Float64Array(64); this.di = 0;      // fast samples, for coming down
+    this.a = 0; this.b = 0;
+  }
+  reset() { this.x.fill(0); this.d.fill(0); this.a = this.b = 0; }
+  up(v) {
+    const x = this.x, i = this.xi = (this.xi + 1) & 31;
+    x[i] = v;
+    let a = 0, b = 0;
+    const eI = this.eI, eC = this.eC, oI = this.oI, oC = this.oC;
+    for (let j = 0; j < eC.length; j++) a += eC[j] * x[(i - eI[j]) & 31];
+    for (let j = 0; j < oC.length; j++) b += oC[j] * x[(i - oI[j]) & 31];
+    this.a = a; this.b = b;
+  }
+  push(v) { this.d[this.di = (this.di + 1) & 63] = v; }
+  out() {
+    const d = this.d, i = this.di, dI = this.dI, dC = this.dC;
+    let y = 0;
+    for (let j = 0; j < dC.length; j++) y += dC[j] * d[(i - dI[j]) & 63];
+    return y;
+  }
+}
+/** A Chebyshev low-pass (even order, `ripple` dB in the pass band, edge fc as a fraction of the sample
+ *  rate) as second-order sections [b0, b1, b2, a1, a2], level centred on the ripple. */
+function chebyLowpass(order, fc, ripple) {
+  const eps = Math.sqrt(Math.pow(10, ripple / 10) - 1), a = Math.asinh(1 / eps) / order, K = Math.tan(Math.PI * fc);
+  const out = [];
+  for (let k = 1; k <= order / 2; k++) {
+    const th = Math.PI * (2 * k - 1) / (2 * order), sg = -Math.sinh(a) * Math.sin(th), om = Math.cosh(a) * Math.cos(th);
+    const W = (sg * sg + om * om) * K * K, B = -2 * sg * K, a0 = 1 + B + W;
+    out.push([W / a0, 2 * W / a0, W / a0, (2 * W - 2) / a0, (1 - B + W) / a0]);
+  }
+  const g = Math.pow(10, -ripple / 40);
+  for (let i = 0; i < 3; i++) out[0][i] *= g;
+  return out;
+}
+class Cascade {
+  constructor(sections) { this.c = Float64Array.from(sections.flat()); this.n = sections.length; this.z = new Float64Array(this.n * 2); }
+  reset() { this.z.fill(0); }
+  run(x) {
+    const c = this.c, z = this.z;
+    for (let k = 0, i = 0, j = 0; k < this.n; k++, i += 5, j += 2) {
+      const y = c[i] * x + z[j];
+      z[j] = c[i + 1] * x - c[i + 3] * y + z[j + 1];
+      z[j + 1] = c[i + 2] * x - c[i + 4] * y;
+      x = y;
+    }
+    return x;
+  }
+}
 
 /** Soft limiter from Clouds: transparent when small, never exceeds ±1. */
 function softLimit(x) { return x < -3 ? -1 : x > 3 ? 1 : x * (27 + x * x) / (27 + 9 * x * x); }
@@ -225,11 +316,26 @@ class TapeCore {
     this.gPk = new Float32Array(MAX_GRAINS);  this.gAmp = new Float32Array(MAX_GRAINS);
     this.gPanL = new Float32Array(MAX_GRAINS); this.gPanR = new Float32Array(MAX_GRAINS);
     this.gRep = new Float32Array(MAX_GRAINS * 4);
-    this.rise = new Float32Array(513);                         // half a Hann window, 0 → 1
+    this.rise = new Float32Array(514);                         // half a Hann window, 0 → 1 (and one spare, for reading between entries)
     for (let i = 0; i <= 512; i++) this.rise[i] = 0.5 - 0.5 * Math.cos(Math.PI * i / 512);
+    this.rise[513] = 1;
     // Drift: four slow random wanders, one each for position, size, pitch and density
     this.wPos = new Wander(this.rng, sr, 0.22); this.wSize = new Wander(this.rng, sr, 0.3);
     this.wPitch = new Wander(this.rng, sr, 0.35); this.wDens = new Wander(this.rng, sr, 0.27);
+
+    // HQ engine: a tape at twice the sample rate, the oversampler (one ×2 stage up to 2×, a second up to 4×,
+    // per side), the dry signal's delay line, and the band-limited copies of the grain tape with their filters
+    this.hq = false;
+    this.buf2L = new Float32Array(size * 2); this.buf2R = new Float32Array(size * 2); this.mask2 = size * 2 - 1;
+    const hA = kaiserLowpass(47, 0.25, 7), hB = kaiserLowpass(21, 0.25, 8);
+    this.osL = [new Stage2(hA), new Stage2(hB)]; this.osR = [new Stage2(hA), new Stage2(hB)];
+    this.t0 = 0; this.t1 = 0;
+    this.dryL = new Float32Array(64); this.dryR = new Float32Array(64); this.dryI = 0;
+    this.mipL = MIPS.map(() => new Float32Array(gN)); this.mipR = MIPS.map(() => new Float32Array(gN));
+    this.mipFL = MIPS.map(([order, fc]) => new Cascade(chebyLowpass(order, fc, 0.5)));
+    this.mipFR = MIPS.map(([order, fc]) => new Cascade(chebyLowpass(order, fc, 0.5)));
+    this.mipValid = 0;                                           // how much of the copies has been written since HQ came on
+    this.gLv = new Uint8Array(MAX_GRAINS);                       // which copy each grain reads: 0 = the tape itself
 
     // space: a plate-style reverb (the Griesinger loop used in Mutable Instruments Clouds, lengths at 32 kHz)
     const rs = sr / 32000;
@@ -300,6 +406,35 @@ class TapeCore {
     return ((a * f - b) * f + c) * f + x0;
   }
 
+  _read2(buf, pos) {           // the same read, on the HQ engine's 2× tape
+    const i = Math.floor(pos), f = pos - i, m = this.mask2;
+    const xm1 = buf[(i - 1) & m], x0 = buf[i & m], x1 = buf[(i + 1) & m], x2 = buf[(i + 2) & m];
+    const c = (x1 - xm1) * 0.5, v = x0 - x1, w = c + v, a = w + v + (x2 - x0) * 0.5, b = w + a;
+    return ((a * f - b) * f + c) * f + x0;
+  }
+
+  /** HQ record head. One driven sample in; out come the two samples that go on the 2× tape (t0, then t1).
+   *  The sample is raised to 4×, saturated there, brought back to 2× and band-limited to the audio range. */
+  _record2(os, u, bias, tb) {
+    const A = os[0], B = os[1];
+    A.up(u);
+    const second = A.b;
+    B.up(A.a); B.push(Math.tanh(B.a + bias) - tb); let d = B.out(); B.push(Math.tanh(B.b + bias) - tb);
+    A.push(d); this.t0 = A.out();
+    B.up(second); B.push(Math.tanh(B.a + bias) - tb); d = B.out(); B.push(Math.tanh(B.b + bias) - tb);
+    A.push(d); this.t1 = A.out();
+  }
+
+  /** HQ: write the grain tape's band-limited copies at index i (each copy is the one before, filtered again).
+   *  With `r` the sample is folded in by that much instead of replacing what is there (the frozen tape). */
+  _mipWrite(i, l, r, fold) {
+    for (let k = 0; k < MIPS.length; k++) {
+      l = this.mipFL[k].run(l); r = this.mipFR[k].run(r);
+      if (fold) { this.mipL[k][i] += fold * (l - this.mipL[k][i]); this.mipR[k][i] += fold * (r - this.mipR[k][i]); }
+      else { this.mipL[k][i] = l; this.mipR[k][i] = r; }
+    }
+  }
+
   _startDropout(ch, len, depth) {
     if (ch.dLen > 0) return;
     ch.dLen = len; ch.dPos = 0; ch.dDepth = depth;
@@ -344,6 +479,8 @@ class TapeCore {
     if (off > N - 16 - reach) off = N - 16 - reach;
     let pos = this.gw - off; if (pos < 0) pos += N;
 
+    // HQ: a grain played well above normal speed reads a band-limited copy, so its top end cannot alias
+    this.gLv[k] = this.hq && rate >= 1.6 && off + len * rate + 64 < this.mipValid ? (rate >= 3.5 ? 3 : rate >= 2.5 ? 2 : 1) : 0;
     this.gPos[k] = pos; this.gRate[k] = rev ? -rate : rate;
     this.gLen[k] = len; this.gInv[k] = 1 / len; this.gAge[k] = 0;
     // Shape: where the grain peaks. 0 = hit and decay, half = bell, 1 = swell
@@ -456,6 +593,19 @@ class TapeCore {
       this.gAmt = tgG; this.gHi = tgHi; this.gWd = tgWd;
     }
 
+    const hq = P.hq > 0.5;
+    if (hq !== this.hq) {            // changing engine: start the one coming in from an empty tape
+      this.hq = hq;
+      if (hq) { this.buf2L.fill(0); this.buf2R.fill(0); } else { bufL.fill(0); bufR.fill(0); }
+      for (const st of this.osL) st.reset();
+      for (const st of this.osR) st.reset();
+      this.dryL.fill(0); this.dryR.fill(0);
+      for (const f of this.mipFL) f.reset();
+      for (const f of this.mipFR) f.reset();
+      this.mipValid = 0; L.e2 = R.e2 = 0;
+    }
+    const buf2L = this.buf2L, buf2R = this.buf2R, dryL = this.dryL, dryR = this.dryR, mipL = this.mipL, mipR = this.mipR, gLv = this.gLv;
+
     const kF = this.kFast, kS = this.kSlow, aE = this.aE, aN = this.aN, nGain = this.nGain;
     let w = this.w;
 
@@ -470,14 +620,20 @@ class TapeCore {
 
       // ── record head: saturate, write to tape ─────────────────────────────────────────────────
       L.e1 += aE * (xl - L.e1);
-      let y = (Math.tanh((xl + emph * (xl - L.e1)) * gD + bias) - tb) * gMk;
-      L.e2 += aE * (y - L.e2);
-      bufL[w] = y - de * (y - L.e2);
-
       R.e1 += aE * (xr - R.e1);
-      y = (Math.tanh((xr + emph * (xr - R.e1)) * gD + bias) - tb) * gMk;
-      R.e2 += aE * (y - R.e2);
-      bufR[w] = y - de * (y - R.e2);
+      if (hq) {                      // saturate at 4×, write the 2× tape; the de-emphasis moves to the playback side
+        this._record2(this.osL, (xl + emph * (xl - L.e1)) * gD, bias, tb);
+        buf2L[2 * w] = this.t0 * gMk; buf2L[2 * w + 1] = this.t1 * gMk;
+        this._record2(this.osR, (xr + emph * (xr - R.e1)) * gD, bias, tb);
+        buf2R[2 * w] = this.t0 * gMk; buf2R[2 * w + 1] = this.t1 * gMk;
+      } else {
+        let y = (Math.tanh((xl + emph * (xl - L.e1)) * gD + bias) - tb) * gMk;
+        L.e2 += aE * (y - L.e2);
+        bufL[w] = y - de * (y - L.e2);
+        y = (Math.tanh((xr + emph * (xr - R.e1)) * gD + bias) - tb) * gMk;
+        R.e2 += aE * (y - R.e2);
+        bufR[w] = y - de * (y - R.e2);
+      }
 
       // ── transport: how far behind the record head are we reading? ────────────────────────────
       const j = this.jit.tick();
@@ -531,13 +687,27 @@ class TapeCore {
       const sg = speed >= 0.25 ? 1 : (speed * 4) * (speed * 4);
 
       const base = w + size;
-      let yl = this._read(bufL, base - dl - this.sd);
-      let yr = this._read(bufR, base - dlR - this.sd);
-      if (this.xfading) {
-        const ol = this._read(bufL, base - dl - this.sdOld);
-        const or = this._read(bufR, base - dlR - this.sdOld);
-        yl = ol + (yl - ol) * this.xf; yr = or + (yr - or) * this.xf;
-        this.xf += xfInc; if (this.xf >= 1) this.xfading = false;
+      let yl, yr;
+      if (hq) {
+        yl = this._read2(buf2L, 2 * (base - dl - this.sd));
+        yr = this._read2(buf2R, 2 * (base - dlR - this.sd));
+        if (this.xfading) {
+          const ol = this._read2(buf2L, 2 * (base - dl - this.sdOld));
+          const or = this._read2(buf2R, 2 * (base - dlR - this.sdOld));
+          yl = ol + (yl - ol) * this.xf; yr = or + (yr - or) * this.xf;
+          this.xf += xfInc; if (this.xf >= 1) this.xfading = false;
+        }
+        L.e2 += aE * (yl - L.e2); yl -= de * (yl - L.e2);
+        R.e2 += aE * (yr - R.e2); yr -= de * (yr - R.e2);
+      } else {
+        yl = this._read(bufL, base - dl - this.sd);
+        yr = this._read(bufR, base - dlR - this.sd);
+        if (this.xfading) {
+          const ol = this._read(bufL, base - dl - this.sdOld);
+          const or = this._read(bufR, base - dlR - this.sdOld);
+          yl = ol + (yl - ol) * this.xf; yr = or + (yr - or) * this.xf;
+          this.xf += xfInc; if (this.xf >= 1) this.xfading = false;
+        }
       }
       if (L.prevDelay >= 0) { this.mDev += (L.prevDelay - dl) + (speed - 1); this.mCount++; }
       L.prevDelay = dl;
@@ -553,6 +723,7 @@ class TapeCore {
           wr += fb * (softLimit(1.4 * fb * (this.gfR - this.ghR) + wr) - wr);
         }
         gbufL[this.gw] = wl; gbufR[this.gw] = wr;
+        if (hq) { this._mipWrite(this.gw, wl, wr, 0); if (this.mipValid < gN) this.mipValid++; }
         if (++this.gw >= gN) this.gw = 0;
         if (wl < this.wvMin) this.wvMin = wl; else if (wl > this.wvMax) this.wvMax = wl;
         if (++this.wvCnt >= 128) {
@@ -566,6 +737,7 @@ class TapeCore {
         const r = fb * 0.5;
         gbufL[idx] += r * (softLimit(this.gfL) - gbufL[idx]);
         gbufR[idx] += r * (softLimit(this.gfR) - gbufR[idx]);
+        if (hq) this._mipWrite(idx, softLimit(this.gfL), softLimit(this.gfR), r);
         if (++this.gMorph >= loopN) this.gMorph = 0;
       }
       this.gAmt += kF * (tgG - this.gAmt);
@@ -580,17 +752,19 @@ class TapeCore {
         for (let k = 0; k < MAX_GRAINS; k++) {
           if (!gActive[k]) continue;
           const gx = gAge[k] * gInv[k], pk = gPk[k];
-          const env = (gx < pk ? rise[(gx / pk * 512) | 0] : rise[((1 - gx) / (1 - pk) * 512) | 0]) * gAmp[k];
+          const ep = gx < pk ? gx / pk * 512 : (1 - gx) / (1 - pk) * 512, e0 = ep | 0;
+          const env = (hq ? rise[e0] + (ep - e0) * (rise[e0 + 1] - rise[e0]) : rise[e0]) * gAmp[k];   // HQ reads between the table's entries
+          const lv = gLv[k], tL = lv ? mipL[lv - 1] : gbufL, tR = lv ? mipR[lv - 1] : gbufR;
           let pos = gPos[k];
           const i0 = pos | 0, fr = pos - i0;
           let im = i0 - 1; if (im < 0) im += gN;
           let i1 = i0 + 1; if (i1 >= gN) i1 -= gN;
           let i2 = i1 + 1; if (i2 >= gN) i2 -= gN;
           // cubic read: keeps the top end when a grain is pitched, where a straight-line read dulls it
-          let xm = gbufL[im], x0 = gbufL[i0], x1 = gbufL[i1], x2 = gbufL[i2];
+          let xm = tL[im], x0 = tL[i0], x1 = tL[i1], x2 = tL[i2];
           let hc = (x1 - xm) * 0.5, hv = x0 - x1, hw = hc + hv, ha = hw + hv + (x2 - x0) * 0.5;
           cL += (((ha * fr - (hw + ha)) * fr + hc) * fr + x0) * env * gPanL[k];
-          xm = gbufR[im]; x0 = gbufR[i0]; x1 = gbufR[i1]; x2 = gbufR[i2];
+          xm = tR[im]; x0 = tR[i0]; x1 = tR[i1]; x2 = tR[i2];
           hc = (x1 - xm) * 0.5; hv = x0 - x1; hw = hc + hv; ha = hw + hv + (x2 - x0) * 0.5;
           cR += (((ha * fr - (hw + ha)) * fr + hc) * fr + x0) * env * gPanR[k];
           pos += gRate[k];
@@ -707,7 +881,14 @@ class TapeCore {
 
       // ── mix, then master: low cut → tone tilt → width → glue → output → limiter ───────────────
       const mix = this.gMix;
-      let ol = xl + mix * (wetL - xl), or = xr + mix * (wetR - xr);
+      let dxl = xl, dxr = xr;
+      if (hq) {                      // the dry signal waits as long as the wet one took, so the two mix without combing
+        const di = this.dryI;
+        dryL[di] = xl; dryR[di] = xr;
+        dxl = dryL[(di - HQ_DRY) & 63]; dxr = dryR[(di - HQ_DRY) & 63];
+        this.dryI = (di + 1) & 63;
+      }
+      let ol = dxl + mix * (wetL - dxl), or = dxr + mix * (wetR - dxr);
 
       ML.h1 += aLC * (ol - ML.h1); ol -= ML.h1; ML.h2 += aLC * (ol - ML.h2); ol -= ML.h2;
       MR.h1 += aLC * (or - MR.h1); or -= MR.h1; MR.h2 += aLC * (or - MR.h2); or -= MR.h2;
@@ -775,6 +956,9 @@ if (typeof registerProcessor === 'function') {
       this.silence = new Float32Array(128);
       this.scratch = new Float32Array(128);
       this.blocks = 0;
+      // how hard the engine is working: time spent in process() against the time of audio it made
+      this.clock = typeof performance !== 'undefined' && performance.now ? () => performance.now() : () => Date.now();
+      this.busy = 0; this.made = 0; this.load = 0;
       // recorder: copies the input ('in') or the finished output ('out') and posts it to the page in chunks.
       // With `wait` (a level, 0..1) it holds off until the sound first passes that level, then starts with
       // the 30 ms before it, so the attack is whole, and tells the page with { recStarted }.
@@ -804,7 +988,10 @@ if (typeof registerProcessor === 'function') {
       const inL = inp[0] || this.silence, inR = inp[1] || inL;
       const core = this.core;
       for (let i = 0; i < core.ids.length; i++) { const id = core.ids[i]; core.target[id] = parameters[id][0]; }
+      const t0 = this.clock();
       core.process(inL, inR, out[0], out[1] || this.scratch, n);
+      this.busy += this.clock() - t0; this.made += n * 1000 / sampleRate;
+      if (this.made >= 1000) { this.load = this.busy / this.made; this.busy = 0; this.made = 0; }
       const r = this.rec;
       if (r) {
         const sL = r.mode === 'in' ? inL : out[0], sR = r.mode === 'in' ? inR : (out[1] || out[0]);
@@ -833,7 +1020,7 @@ if (typeof registerProcessor === 'function') {
           if (r.left <= 0) this.endRec();
         }
       }
-      if (++this.blocks >= 4) { this.blocks = 0; this.port.postMessage(core.readMeter()); }
+      if (++this.blocks >= 4) { this.blocks = 0; const m = core.readMeter(); m.load = this.load; this.port.postMessage(m); }
       return true;
     }
   }
@@ -841,4 +1028,4 @@ if (typeof registerProcessor === 'function') {
 }
 
 // ── 3. node ──────────────────────────────────────────────────────────────────────────────────────
-if (typeof module !== 'undefined' && module.exports) module.exports = { TapeCore, PARAM_DEFS, GROUPS };
+if (typeof module !== 'undefined' && module.exports) module.exports = { TapeCore, PARAM_DEFS, GROUPS, OS_LATENCY, HQ_DRY, MIPS, kaiserLowpass, chebyLowpass, Cascade, Stage2 };

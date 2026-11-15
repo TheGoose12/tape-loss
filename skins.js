@@ -134,23 +134,6 @@ function skinLamps(g, x, y, bypassed, right) {
   LAMP_NAMES.forEach((name, i) => { g.fillStyle = on[i] ? (hot[i] ? HOT : INK) : FAINT; g.fillText(name, lx, y); lx += g.measureText(name).width + 8; });
   return w;
 }
-/** Display: the spectrum and the waveform, drawn from the sound alone. */
-function soundBand(g, x0, x1, top, bot) {
-  const h = bot - top, yS = top + h * 0.4, hS = h * 0.34, bw = (x1 - x0) / BARS;
-  g.fillStyle = FAINT; g.fillRect(x0, yS - 0.5, x1 - x0, 1);
-  for (let i = 0; i < BARS; i++) {
-    const v = spec[i], bh = Math.max(1.5, v * hS);
-    g.fillStyle = v > 0.8 ? HOT : `rgba(241,239,232,${0.35 + 0.65 * v})`;
-    rr(g, x0 + i * bw + bw * 0.18, yS - bh, bw * 0.64, bh * 2, Math.min(3, bw * 0.3, bh)); g.fill();
-  }
-  const yW = top + h * 0.9, hW = h * 0.09;
-  g.beginPath();
-  if (timeData && playing) for (let i = 0, n = timeData.length; i < n; i += 4) {
-    const x = x0 + i / (n - 1) * (x1 - x0), y = yW - clamp(timeData[i] * 1.6, -1, 1) * hW;
-    i ? g.lineTo(x, y) : g.moveTo(x, y);
-  } else { g.moveTo(x0, yW); g.lineTo(x1, yW); }
-  g.strokeStyle = INK; g.lineWidth = 2; g.lineJoin = 'round'; g.stroke();
-}
 function backHint(g, W, y) {
   const age = performance.now() - showSince;
   if (age > 3500) return;
@@ -321,7 +304,7 @@ function drawCassetteDeck(g, W, H, dt, bypassed, full) {
   const ch = Math.max(50, Math.min(bot - top, (W - 2 * pad - side) * 0.63));
   drawCassette(g, W / 2, (top + bot) / 2 - 2, ch / 0.63, bypassed);
   if (full) {
-    soundBand(g, W * 0.06, W * 0.94, H - low, H - 26);
+    drawAudio(g, W * 0.06, W * 0.94, H - low + 6, H - 30, bypassed, true);       // the same waveform as the working screen
     backHint(g, W, H - 10);
     return;
   }
@@ -523,7 +506,7 @@ function drawReelDeck(g, W, H, dt, bypassed, full) {
   const glass = g.createLinearGradient(0, bt, 0, H); glass.addColorStop(0, '#17171a'); glass.addColorStop(1, '#0b0b0c');
   rr(g, 9, bt + 1, W - 18, H - bt - 10, 9); g.fillStyle = glass; g.fill();
   if (full) {
-    soundBand(g, bx0 + 6, bx1 - 6, bt + 12, H - 22);
+    drawAudio(g, bx0 + 6, bx1 - 6, bt + 14, H - 24, bypassed, true);              // the same waveform as the working screen
     backHint(g, W, H - 14);
     return;
   }

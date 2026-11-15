@@ -10,6 +10,8 @@ const GROUP = Object.fromEntries(GROUPS.map(g => [g.id, g]));
 GROUPS.forEach(g => { g.knobs = KNOBS.filter(d => d.group === g.id); });
 const values = Object.fromEntries(PARAM_DEFS.map(d => [d.id, d.def]));    // where the knobs sit
 const LIVE_ONLY = ['stop', 'bypass', 'drop', 'freeze'];                    // momentary: never saved, undone or bounced
+const MACHINE = ['hq'];                                                    // belongs to the machine, not to a sound: never in a preset, A/B or undo
+try { if (localStorage.getItem('tapeloss.hq') === '0') values.hq = 0; } catch (_) {}
 const has = id => id in DEF;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const clamp01 = n => clamp(n, 0, 1);
@@ -177,7 +179,7 @@ function audible(id) {
 }
 function refresh(id) {
   const d = DEF[id], v = effective(id);
-  if (node) node.parameters.get(id).value = v;
+  if (node && node.parameters.has(id)) node.parameters.get(id).value = v;
   const el = knobEls[id];
   if (el) {
     const n = toNorm(d, v), arc = el.querySelector('.val');
@@ -225,7 +227,7 @@ function setValue(id, v, quiet) {
   values[id] = clamp(v, d.min, d.max);
   refresh(id);
   if (!quiet && d.group !== 'switch' && d.group !== 'master' && id !== 'speed') presetSel.value = '';
-  if (!LIVE_ONLY.includes(id)) histMark();
+  if (!LIVE_ONLY.includes(id) && !MACHINE.includes(id)) histMark();
 }
 
 // ── pads ─────────────────────────────────────────────────────────────────────────────────────────
@@ -403,11 +405,11 @@ showHelp(null);
 // ── presets, A/B, undo ───────────────────────────────────────────────────────────────────────────
 function snap() {
   const o = { reel: reelName, preset: presetSel.value };
-  for (const d of PARAM_DEFS) if (!LIVE_ONLY.includes(d.id)) o[d.id] = values[d.id];
+  for (const d of PARAM_DEFS) if (!LIVE_ONLY.includes(d.id) && !MACHINE.includes(d.id)) o[d.id] = values[d.id];
   return o;
 }
 function applySnap(o) {
-  for (const id in o) if (has(id)) setValue(id, o[id], true);
+  for (const id in o) if (has(id) && !MACHINE.includes(id)) setValue(id, o[id], true);
   reelName = o.reel || reelName;
   presetSel.value = o.preset || '';
 }
@@ -545,7 +547,9 @@ async function ensureAudio() {
   if (ctx) { if (ctx.state !== 'running') ctx.resume().catch(() => {}); return; }
   ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
   ctx.resume().catch(() => {});                 // still inside the tap that asked for sound
-  await ctx.audioWorklet.addModule('dsp/tape-processor.js');
+  // the engine is fetched with the page's own version tag, so a browser never pairs a new page with an old engine
+  const tag = (document.querySelector('script[src*="app.js"]') || {}).src || '';
+  await ctx.audioWorklet.addModule('dsp/tape-processor.js' + (tag.includes('?') ? tag.slice(tag.indexOf('?')) : ''));
   node = new AudioWorkletNode(ctx, 'tape-warble', {
     numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit',
   });
@@ -559,7 +563,7 @@ async function ensureAudio() {
   analyser = ctx.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0.72;
   master = ctx.createGain(); applyMute();
   node.connect(analyser); analyser.connect(master); master.connect(ctx.destination);
-  for (const id in values) node.parameters.get(id).value = effective(id);
+  for (const id in values) if (node.parameters.has(id)) node.parameters.get(id).value = effective(id);
   if (!tape.file.buf) setTape('file', makeDemo(ctx), 'Demo loop');
 }
 function makePeaks(buf) {
@@ -759,7 +763,7 @@ async function saveWav() {
 }
 
 function syncUI() {
-  $('#play-label').textContent = playing ? 'Stop' : 'Play';
+  $('#play').setAttribute('aria-label', playing ? 'Stop' : 'Play');
   $('#play').setAttribute('aria-pressed', playing);
   $('#rec').setAttribute('aria-pressed', !!rec);
   $('#rec').classList.toggle('armed', !!(rec && rec.armed));
@@ -894,8 +898,9 @@ const wMin = new Float32Array(WN), wMax = new Float32Array(WN);              // 
 const hCents = new Float32Array(HN), hDrop = new Float32Array(HN).fill(1);   // the motion: one entry per report
 const revLvl = new Float32Array(5), revPeak = new Float32Array(5), outLvl = new Float32Array(5), outPeak = new Float32Array(5);
 const spec = new Float32Array(BARS);
-let freqData = null, timeData = null;
+let freqData = null;
 let wPos = 0, hPos = 0, reelAngle = 0, reelSpeed = 0, quiet = 0, cents = 0, tilt = 0, dropGain = 1, dropVis = 0;
+let engineLoad = 0;           // the share of real time the sound engine is using, 0..1
 let peakIn = 0, peakOut = 0, tapeLvl = 0, gr = 1, frozen = false, grains = null, range = 25, lastT = 0, played = 0, loud = 0, showSince = 0;
 
 function fit(cv) {
@@ -1022,14 +1027,17 @@ function drawSource(g, x0, x1, top, bot) {
   }
   if (bufNode) { const xp = x0 + tapePos() / dur * w; g.fillStyle = INK; g.fillRect(xp - 1, pt - 2, 2, bot - pt + 4); }
 }
-/** The sound: the last six seconds off the tape, newest at the left, with the grains riding on it. */
-function drawAudio(g, x0, x1, top, bot, bypassed) {
+/** The sound: the last six seconds off the tape, newest at the left, with the grains riding on it.
+ *  `bare` leaves the words off, for the Display. */
+function drawAudio(g, x0, x1, top, bot, bypassed, bare) {
   const amt = audible('grains'), on = amt > 0.005 && !bypassed;
-  g.font = '600 9px ' + FONT; g.fillStyle = DIM; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
-  g.fillText(frozen ? 'SOUND · HELD' : 'SOUND', x0, top + 8);
-  g.textAlign = 'right';
-  g.fillText(on ? `${grains ? grains.length / 4 : 0} GRAINS` : `LAST ${SPAN} S`, x1, top + 8);
-  const pt = top + 14, mid = (pt + bot) / 2, half = (bot - pt) / 2, w = x1 - x0;
+  if (!bare) {
+    g.font = '600 9px ' + FONT; g.fillStyle = DIM; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+    g.fillText(frozen ? 'SOUND · HELD' : 'SOUND', x0, top + 8);
+    g.textAlign = 'right';
+    g.fillText(on ? `${grains ? grains.length / 4 : 0} GRAINS` : `LAST ${SPAN} S`, x1, top + 8);
+  }
+  const pt = bare ? top : top + 14, mid = (pt + bot) / 2, half = (bot - pt) / 2, w = x1 - x0;
   const colDt = 128 / (ctx ? ctx.sampleRate : 48000), perPx = SPAN / colDt / w, n = Math.floor(w);
   g.strokeStyle = FAINT; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, mid); g.lineTo(x1, mid); g.stroke();
   g.beginPath();
@@ -1130,7 +1138,7 @@ function drawWork(g, W, H, dt, bypassed) {
 }
 
 /** Display: drawn only from the sound. The reels turn with the tape; the spectrum is printed along
- *  a line like tape running across the screen; the waveform rides under it; the room glows with level. */
+ *  a line like tape running across the screen; the sound's waveform runs under it; the room glows with level. */
 function drawShow(g, W, H, dt) {
   srcGeom = null;
   loud += (peakOut - loud) * Math.min(1, dt * 8);
@@ -1150,14 +1158,8 @@ function drawShow(g, W, H, dt) {
     g.fillStyle = v > 0.8 ? HOT : `rgba(241,239,232,${a})`;
     rr(g, x0 + i * bw + bw * 0.18, yS - h, bw * 0.64, h * 2, Math.min(3, bw * 0.3)); g.fill();
   }
-  // the waveform
-  const yW = H * 0.88, hW = H * 0.07;
-  g.beginPath();
-  if (timeData) for (let i = 0, n = timeData.length; i < n; i += 4) {
-    const x = x0 + i / (n - 1) * (x1 - x0), y = yW - clamp(timeData[i] * 1.6, -1, 1) * hW;
-    i ? g.lineTo(x, y) : g.moveTo(x, y);
-  } else { g.moveTo(x0, yW); g.lineTo(x1, yW); }
-  g.strokeStyle = INK; g.lineWidth = 2; g.lineJoin = 'round'; g.stroke();
+  // the waveform: the same one the working screen shows, the last six seconds off the tape
+  drawAudio(g, x0, x1, H * 0.79, H * 0.95, values.bypass > 0.5, true);
 
   g.textBaseline = 'alphabetic'; g.font = '700 10px ' + FONT; g.fillStyle = DIM; g.textAlign = 'left';
   g.fillText('T A P E   L O S S', 20, 26);
@@ -1278,6 +1280,7 @@ function draw(now) {
     tapeLvl = Math.max(tapeLvl * 0.9, m.peakTape || 0);
     grNow = Math.min(grNow, m.gr);
     frozen = m.frozen; grains = m.grains;
+    if (m.load !== undefined) engineLoad += (m.load - engineLoad) * 0.04;
     for (let i = 0; i < 5; i++) { revLvl[i] = Math.max(revLvl[i] * 0.93, m.rev[i]); outLvl[i] = Math.max(outLvl[i] * 0.9, m.outBands[i]); }
     hPos = (hPos + 1) % HN; hCents[hPos] = cents; hDrop[hPos] = dropGain;
     if (m.wave) for (let i = 0; i < m.wave.length; i += 2) { wPos = (wPos + 1) % WN; wMin[wPos] = m.wave[i]; wMax[wPos] = m.wave[i + 1]; }
@@ -1298,8 +1301,8 @@ function draw(now) {
 
   // the spectrum and waveform, straight from what is going out
   if (analyser && (show || skin !== 'unit')) {
-    if (!freqData) { freqData = new Uint8Array(analyser.frequencyBinCount); timeData = new Float32Array(analyser.fftSize); }
-    analyser.getByteFrequencyData(freqData); analyser.getFloatTimeDomainData(timeData);
+    if (!freqData) freqData = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(freqData);
     const hzPerBin = ctx.sampleRate / analyser.fftSize;
     for (let i = 0; i < BARS; i++) {
       const b0 = Math.max(1, Math.floor(40 * Math.pow(400, i / BARS) / hzPerBin)), b1 = Math.max(b0 + 1, Math.floor(40 * Math.pow(400, (i + 1) / BARS) / hzPerBin));
