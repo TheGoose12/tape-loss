@@ -82,13 +82,11 @@ body[data-src="live"] #save { display: none; }
 #rec[aria-pressed="true"] .ico-rec { animation: blink .8s steps(2) infinite; }
 #rec:disabled { opacity: .35; }
 #rec.armed .ico-rec { background: none; box-shadow: inset 0 0 0 3px var(--accent); animation-duration: 1.1s; }
-/* bypass: a line into a box (the effect) and an arrow hopping over it; pressed, the hop lights orange and the box empties */
-.ico-bypass { fill: none; stroke: var(--ink); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; overflow: visible; }
+/* bypass: a box (the effect) and one arc going over it; pressed, the arc lights orange and the box empties */
+.ico-bypass { fill: none; stroke: var(--ink); stroke-width: 2.4; stroke-linecap: round; overflow: visible; }
 .ico-bypass .fx { fill: var(--ink); stroke: none; }
-.ico-bypass .hop, .ico-bypass .tip { stroke-width: 2; }
-#bypass[aria-pressed="true"] .ico-bypass .hop, #bypass[aria-pressed="true"] .ico-bypass .tip { stroke: var(--accent); stroke-width: 2.6; }
-#bypass[aria-pressed="true"] .ico-bypass .thru { opacity: .35; }
-#bypass[aria-pressed="true"] .ico-bypass .fx { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-dasharray: 2.2 2.6; opacity: .55; }
+#bypass[aria-pressed="true"] .ico-bypass .hop { stroke: var(--accent); }
+#bypass[aria-pressed="true"] .ico-bypass .fx { fill: none; stroke: var(--ink); stroke-width: 1.6; opacity: .45; }
 @keyframes blink { 50% { opacity: .35; } }
 
 /* ── stage: screen and effect panel ───────────────────────────────────────────────────────────── */
