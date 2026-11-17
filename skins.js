@@ -304,8 +304,17 @@ function drawCassetteDeck(g, W, H, dt, bypassed, full) {
   const ch = Math.max(50, Math.min(bot - top, (W - 2 * pad - side) * 0.63));
   drawCassette(g, W / 2, (top + bot) / 2 - 2, ch / 0.63, bypassed);
   if (full) {
+    if (typeof vizTube === 'function') {                 // the tube, top right; opened, the cassette is seen through
+      const tr = clamp(Math.min(W, H) * 0.045, 22, 36);
+      vizTube(g, W - 26 - tr, 46 + tr, tr, DIM);
+      if (vizE > 0.004) {
+        g.fillStyle = `rgba(9,9,10,${vizE})`; g.fillRect(0, 40, W, bot + 14 - 40);
+        vizCassette(g, W / 2, (top + bot) / 2 - 2, ch / 0.63, vizE);
+      }
+    }
     drawAudio(g, W * 0.06, W * 0.94, H - low + 6, H - 30, bypassed, true);       // the same waveform as the working screen
     backHint(g, W, H - 10);
+    if (typeof vizHint === 'function') vizHint(g, W, H - 10);
     return;
   }
   levelBar(g, x0, top + 4, bot, peakIn, 'IN');
@@ -435,6 +444,15 @@ function drawReelDeck(g, W, H, dt, bypassed, full) {
   const sep = R * 1.07, xC = W / 2, xL = xC - sep, xR = xC + sep;
   const y0 = Math.max(10, (P - (2 * R + 12 + row)) / 2), cy = y0 + R, rowBot = cy + R + 12 + row, yT = cy + R + 32;
   for (const [x, y] of [[13, 13], [W - 13, 13], [13, P - 11], [W - 13, P - 11]]) screw(g, x, y, 4.5);
+  // the visualizer (viz.js), opened from the Display's tube: the plate turns to black glass inside its frame
+  const vz = full && typeof vizE !== 'undefined' ? vizE : 0;
+  if (vz > 0.004) {
+    g.save(); g.globalAlpha = vz;
+    rr(g, 23, 23, W - 46, P - 38, 11); g.fillStyle = 'rgba(255,255,255,.5)'; g.fill();
+    const pane = g.createLinearGradient(0, 24, 0, P); pane.addColorStop(0, '#17171a'); pane.addColorStop(1, '#0b0b0c');
+    rr(g, 24, 24, W - 48, P - 40, 10); g.fillStyle = pane; g.fill();
+    g.restore();
+  }
 
   // the counter, in the gap above where the reels meet
   const chord = Math.sqrt(Math.max(0, R * R - (R - 30) * (R - 30))), cw = Math.min(104, 2 * (sep - chord) - 14);
@@ -452,14 +470,15 @@ function drawReelDeck(g, W, H, dt, bypassed, full) {
   const gx = Math.min(sep + R * 0.78, W / 2 - 12 - rl), hw = clamp(W * 0.24, 92, 210);
   const CL = { x: xC - gx, y: yT }, CR = { x: xC + gx, y: yT };
   const tL = tangentPick(xL, cy, pack, CL.x, CL.y, true), tR = tangentPick(xR, cy, pack, CR.x, CR.y, false);
-  reelBack(g, xL, cy, R); reelBack(g, xR, cy, R);
+  g.globalAlpha = 1 - vz; reelBack(g, xL, cy, R); reelBack(g, xR, cy, R); g.globalAlpha = 1;
   const lift = dropVis * row * 0.16;
   g.strokeStyle = dropVis > 0.05 ? HOT : TAPE; g.lineWidth = lw; g.lineJoin = 'round'; g.lineCap = 'round';
   g.beginPath(); g.moveTo(tL.x, tL.y); g.arcTo(CL.x, CL.y, CL.x + 40, yT, rl);
   g.lineTo(xC - hw * 0.46, yT); g.lineTo(xC, yT - lift); g.lineTo(xC + hw * 0.46, yT);
   g.arcTo(CR.x, CR.y, tR.x, tR.y, rl); g.lineTo(tR.x, tR.y); g.stroke();
-  reelFront(g, xL, cy, R, reelAngle);
-  reelFront(g, xR, cy, R, reelAngle * 1.03 + 1);
+  if (vz > 0.004 && dropVis <= 0.05) { g.strokeStyle = `rgba(241,239,232,${0.55 * vz})`; g.stroke(); }      // on the glass the tape is drawn light
+  if (vz < 0.996) { g.globalAlpha = 1 - vz; reelFront(g, xL, cy, R, reelAngle); reelFront(g, xR, cy, R, reelAngle * 1.03 + 1); g.globalAlpha = 1; }
+  if (vz > 0.004) { vizReel(g, xL, cy, R, reelAngle, vz, 0); vizReel(g, xR, cy, R, reelAngle * 1.03 + 1, vz, 1); }
   const bL = bendCentre(tL, CL, { x: CL.x + 40, y: yT }, rl), bR = bendCentre({ x: CR.x - 40, y: yT }, CR, tR, rl);
   roller(g, bL.x, bL.y, rl - lw / 2); roller(g, bR.x, bR.y, rl - lw / 2);
 
@@ -508,6 +527,12 @@ function drawReelDeck(g, W, H, dt, bypassed, full) {
   if (full) {
     drawAudio(g, bx0 + 6, bx1 - 6, bt + 14, H - 24, bypassed, true);              // the same waveform as the working screen
     backHint(g, W, H - 14);
+    if (typeof vizTube === 'function') {                 // the tube: top right, in the corner the right reel leaves free
+      let tr = clamp(Math.min(W, H) * 0.045, 22, 36);
+      while (tr > 16 && Math.hypot(W - 28 - tr - xR, 28 + tr - cy) < R + tr + 10) tr -= 2;
+      vizTube(g, W - 28 - tr, 28 + tr, tr, 'rgba(28,28,26,.7)');
+      vizHint(g, W, H - 14);
+    }
     return;
   }
   const lampsW = W > 430 ? skinLamps(g, bx1, bt + 20, bypassed, true) : 0;

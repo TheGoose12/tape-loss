@@ -787,7 +787,7 @@ app.addEventListener('dragleave', () => app.classList.remove('dragging'));
 app.addEventListener('drop', e => { e.preventDefault(); app.classList.remove('dragging'); loadFile(e.dataTransfer.files[0]); });
 
 // Display: the tape, full screen. Tap it to come back.
-function setShow(on) { document.body.classList.toggle('show', on); }
+function setShow(on) { if (on && !document.body.classList.contains('show')) showSince = performance.now(); document.body.classList.toggle('show', on); }
 $('#show').addEventListener('click', () => setShow(true));
 
 // a keyboard still works, when there is one
@@ -1168,6 +1168,11 @@ function drawShow(g, W, H, dt) {
   g.fillText(String(Math.floor(secs / 60)).padStart(2, '0') + ':' + String(secs % 60).padStart(2, '0'), W - 20, 26);
   const age = performance.now() - showSince;                     // a quiet reminder of the way back, then it goes
   if (age < 3500) { g.globalAlpha = clamp01((3500 - age) / 800); g.textAlign = 'center'; g.font = '600 11px ' + FONT; g.fillStyle = DIM; g.fillText(notice() ? 'tap for sound · tap again to go back' : 'tap anywhere to go back', W / 2, H - 14); g.globalAlpha = 1; }
+  if (typeof vizTube === 'function') {                  // the tube, top right, and what it opens
+    const tr = clamp(Math.min(W, H) * 0.045, 22, 36);
+    vizTube(g, W - 26 - tr, 46 + tr, tr, DIM);
+    vizUnit(g, W, H, dt, values.bypass > 0.5);
+  }
 }
 
 // the small displays on the chain, and the two on the Space and Master pages
@@ -1315,6 +1320,7 @@ function draw(now) {
   if (liveNode && liveBuiltIn && !guard && !muted && peakOut > 0.6 && peakIn > 0.5) { howl += dt; if (howl > 1.8) { guard = 'howl'; howl = 0; applyMute(); } }
   else howl = Math.max(0, howl - dt * 2);
   clockGeom = null;
+  if (typeof vizStep === 'function') vizStep(dt, show);        // the visualizer behind the Display's tube (viz.js)
   const { g, W, H } = fit(deckCv);
   if (skin !== 'unit' && typeof drawSkin === 'function') { drawSkin(g, W, H, dt, bypassed, show); if (!show) { drawMinis(bypassed); drawScopes(bypassed); } }
   else if (show) drawShow(g, W, H, dt);
@@ -1325,7 +1331,11 @@ requestAnimationFrame(draw);
 // the screen under your finger: unmute, leave the Display, or drag the loop's ends
 deckCv.addEventListener('pointerdown', e => {
   if (muted || guard) { muted = false; if (guard) { guard = null; micOk = true; howl = 0; } applyMute(); return; }
-  if (document.body.classList.contains('show')) { setShow(false); return; }
+  if (document.body.classList.contains('show')) {      // the Display: its tube opens the visualizer, a tap in the visualizer closes it, any other tap leaves
+    const b = deckCv.getBoundingClientRect();
+    if (typeof vizTap === 'function' && vizTap(e.clientX - b.left, e.clientY - b.top)) return;
+    setShow(false); return;
+  }
   if (clockGeom) {                                     // the counter: a tap sets it back to zero, like the button on a deck
     const b = deckCv.getBoundingClientRect(), cx = e.clientX - b.left, cy = e.clientY - b.top, c = clockGeom;
     if (cx >= c.x && cx <= c.x + c.w && cy >= c.y && cy <= c.y + c.h) { played = 0; say('Counter back to 00:00'); return; }
@@ -1377,7 +1387,6 @@ deckCv.addEventListener('dblclick', e => {
   else { t.ls = 0; t.le = t.buf.duration; say('Loops the whole thing'); }
   if (playing) startBuf();
 });
-$('#show').addEventListener('click', () => { showSince = performance.now(); });
 
 syncUI();
 window.tapeloss = { values, effective, setValue, applyPreset, play, stop, toggleRec, setSource, setShow, holdStart, holdEnd, undo, redo, tape, meters,
