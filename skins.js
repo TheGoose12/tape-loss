@@ -322,8 +322,9 @@ function drawCassetteDeck(g, W, H, dt, bypassed, full) {
   const red = Math.min(1, -20 * Math.log10(Math.max(gr, 1e-3)) / 12);
   g.fillStyle = HOT; g.fillRect(x1 - 12, top + 4, 2.5, (bot - 12 - top - 4) * red);
   const sTop = H - low;
-  drawSource(g, x0, x1, sTop, sTop + 48);
-  const aTop = sTop + 48 + 14, rest = H - aTop - 10;
+  const th = typeof tempoRowH === 'function' ? tempoRowH() : 0;          // tempo.js: room for its row of keys
+  drawSource(g, x0, x1, sTop, sTop + 48 + th);
+  const aTop = sTop + 48 + th + 14, rest = H - aTop - 10;
   if (rest > 112) { drawAudio(g, x0, x1, aTop, aTop + rest * 0.62, bypassed); drawMotion(g, x0, x1, aTop + rest * 0.62 + 10, H - 10, dt, bypassed); }
   else drawAudio(g, x0, x1, aTop, H - 10, bypassed);
 }
@@ -538,6 +539,7 @@ function drawReelDeck(g, W, H, dt, bypassed, full) {
   const lampsW = W > 430 ? skinLamps(g, bx1, bt + 20, bypassed, true) : 0;
   g.font = '600 12px ' + FONT; g.textAlign = 'left'; g.fillStyle = notice() || statusWarn ? HOT : INK;
   g.fillText(fitText(g, statusNow(), bx1 - bx0 - lampsW - 16), bx0, bt + 21);
-  drawSource(g, bx0, bx1, bt + 30, bt + 30 + 44);
-  drawAudio(g, bx0, bx1, bt + 30 + 44 + 12, H - 16, bypassed);
+  const th = typeof tempoRowH === 'function' ? tempoRowH() : 0;          // tempo.js: room for its row of keys
+  drawSource(g, bx0, bx1, bt + 30, bt + 30 + 44 + th);
+  drawAudio(g, bx0, bx1, bt + 30 + 44 + th + 12, H - 16, bypassed);
 }

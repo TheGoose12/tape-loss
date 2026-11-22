@@ -23,7 +23,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Tape Loss: two tape reels on a brushed metal deck">
 <meta name="twitter:card" content="summary_large_image">
-<link rel="stylesheet" href="style.css?v=15">
+<link rel="stylesheet" href="style.css?v=35">
 </head>
 <body>
 <main class="app" id="app">
@@ -66,7 +66,7 @@
     <div class="tools">
       <button type="button" class="key-btn" id="load" data-help="Load an audio file. It becomes the File source.">Load</button>
       <button type="button" class="key-btn toggle" id="thru" aria-pressed="false" data-help="Thru: keep the live input sounding while the loop plays, so you can play over it.">Thru</button>
-      <button type="button" class="key-btn" id="save" data-help="Save a WAV of the loop or file played through the effect as it is set now.">Save WAV</button>
+      <button type="button" class="key-btn" id="save" data-help="Save a WAV of the loop or file: with the effect baked in as it is set now, or without it." aria-haspopup="menu" aria-expanded="false">Save WAV</button>
       <button type="button" class="key-btn" id="skin" data-help="Skin: three faces for the same effect. Unit, Cassette (a tape box with long faders) and Reel (a reel-to-reel deck). Tap to change.">Unit</button>
       <button type="button" class="key-btn" id="show" data-help="Display: the tape, full screen, moving to the sound. Tap the small round window for the visualizer. Tap anywhere else to come back.">Display</button>
     </div>
@@ -96,11 +96,13 @@
   <input type="file" id="file" accept="audio/*" hidden>
 </main>
 
-<script src="dsp/tape-processor.js?v=15"></script>
-<script src="app.js?v=15"></script>
-<script src="skins.js?v=15"></script>
-<script src="tech.js?v=15"></script>
-<script src="viz.js?v=15"></script>
+<script src="dsp/tape-processor.js?v=35"></script>
+<script src="app.js?v=35"></script>
+<script src="skins.js?v=35"></script>
+<script src="tech.js?v=35"></script>
+<script src="viz.js?v=35"></script>
+<script src="tempo.js?v=35"></script>
+<script src="sample.js?v=35"></script>
 <script>
   // on the hosted copy only: keep the app available offline (see sw.js)
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});

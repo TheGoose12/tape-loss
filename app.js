@@ -100,7 +100,7 @@ const HELP_IDLE = 'Touch a control to see what it does. Drag a knob up or down; 
 // Holds: while the pad is down these values replace the knob positions; letting go springs back.
 const HOLDS = {
   stop:   { key: 's', label: 'Brake',  does: 'Brake: the tape winds down to a stop, and spins back up when you let go.', set: () => ({ stop: 1 }) },
-  drop:   { key: 'd', label: 'Drop',   does: 'Drop: the tape lifts off the head; the sound falls away.', set: () => ({ drop: 1 }) },
+  burn:   { key: 'd', label: 'Burn',   does: 'Burn: the tape is hit hard. Drive to full, with flutter on top.', set: () => ({ onTape: 1, onMotion: 1, drive: 1, flutter: Math.max(values.flutter, 0.6) }) },
   freeze: { key: 'f', label: 'Freeze', does: 'Freeze: the grains hold on to what they just heard.', set: () => ({ freeze: 1, onGrain: 1, grains: Math.max(values.grains, 0.85) }) },
   throw:  { key: 'g', label: 'Throw',  does: 'Throw: grains to full.', set: () => ({ onGrain: 1, grains: 1 }) },
   half:   { key: 'h', label: 'Half',   does: 'Half: grains an octave down.', set: () => ({ onGrain: 1, grains: 1, gPitch: -12 }) },
@@ -624,11 +624,15 @@ function closeLive() {
   liveBuiltIn = false; howl = 0;
   if (guard) { guard = null; applyMute(); }          // with the microphone closed there is nothing to guard
 }
-function stopBuf() { if (bufNode) { try { bufNode.stop(); } catch (_) {} bufNode.disconnect(); bufNode = null; } }
+function stopBuf() {
+  if (typeof tempoStop === 'function') tempoStop();                 // tempo.js
+  if (bufNode) { try { bufNode.stop(); } catch (_) {} bufNode.disconnect(); bufNode = null; }
+}
 function startBuf() {
   stopBuf();
   const t = curTape();
   if (!t || !t.buf) return;
+  if (typeof tempoStart === 'function' && tempoStart()) return;     // tempo.js: with a tempo mode on, it does the playing
   const n = ctx.createBufferSource();
   const fb = fadedBuf(t);
   n.buffer = fb || t.buf; n.loop = true;
@@ -723,19 +727,21 @@ async function loadFile(file) {
     say('Reading ' + file.name + '…');
     setTape('file', await ctx.decodeAudioData(await file.arrayBuffer()), file.name);
     source = 'file'; document.body.dataset.src = 'file';
+    if (typeof bankKeep === 'function') bankKeep('file', tape.file);        // sample.js: what is loaded goes in the bank
     await play();
   } catch (err) { say('Could not read that file as audio (' + file.name + ')', true); }
 }
 
-/** Save a WAV: the loop or file, played once through the effect as it is set now, with its tail. */
-async function saveWav() {
+/** Save a WAV: the loop or file, played once through the effect as it is set now, with its tail. With { dry: true }
+ *  it is the loop as it is on the tape instead: no effect, no change of speed, no tail, only its fades. */
+async function saveWav(opts) {
   const t = curTape(), btn = $('#save');
   if (!t || !t.buf) { say('Nothing to save: record a loop or load a file first', true); return; }
   btn.disabled = true;
   try {
-    const sr = t.buf.sampleRate, from = Math.round(t.ls * sr), rate = audible('speed'), last = t.buf.length - 1;
+    const dry = !!(opts && opts.dry === true), sr = t.buf.sampleRate, from = Math.round(t.ls * sr), rate = dry ? 1 : audible('speed'), last = t.buf.length - 1;
     const span = Math.floor((Math.min(t.buf.length, Math.round(t.le * sr)) - from) / rate);      // slower tape, longer file
-    const n = span + Math.round((0.4 + 6 * audible('space')) * sr), [fi, fo] = fades(t), flen = Math.max(0.02, t.le - t.ls);
+    const n = span + (dry ? 0 : Math.round((0.4 + 6 * audible('space')) * sr)), [fi, fo] = fades(t), flen = Math.max(0.02, t.le - t.ls);
     const core = new TapeCore(sr);
     for (const d of PARAM_DEFS) if (!LIVE_ONLY.includes(d.id)) core.setParam(d.id, values[d.id]);
     const inL = t.buf.getChannelData(0), inR = t.buf.numberOfChannels > 1 ? t.buf.getChannelData(1) : inL;
@@ -749,15 +755,21 @@ async function saveWav() {
         const fg = fadeGain((p + i) * rate / sr, flen, fi, fo);
         il[i] = (inL[k] + (inL[k1] - inL[k]) * f) * fg; ir[i] = (inR[k] + (inR[k1] - inR[k]) * f) * fg;
       }
-      core.process(il, ir, outL.subarray(p, p + m), outR.subarray(p, p + m), m);
+      if (dry) { outL.set(il.subarray(0, m), p); outR.set(ir.subarray(0, m), p); }
+      else core.process(il, ir, outL.subarray(p, p + m), outR.subarray(p, p + m), m);
       if (c % 40 === 39) { say(`Saving: ${Math.round(p / n * 100)}%`); await new Promise(r => setTimeout(r)); }
     }
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(encodeWav(outL, outR, sr));
-    a.download = t.title.replace(/\.[^.]+$/, '').replace(/\s+/g, '-').toLowerCase() + '-tape-loss.wav';
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    say('Saved ' + a.download);
+    const name = t.title.replace(/\.[^.]+$/, '').replace(/\s+/g, '-').toLowerCase().replace(/(-tape-loss|-clean)+$/, '') + (dry ? '-clean' : '-tape-loss');
+    const banked = typeof bankTake === 'function' ? await bankTake(name, outL, outR, sr, dry) : false;      // sample.js: a saved sound is kept in the bank too
+    if (opts && opts.bankOnly === true) say(banked ? 'Kept in the bank, with the effect: ' + name : 'Could not keep it in the bank', !banked);
+    else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(encodeWav(outL, outR, sr));
+      a.download = name + '.wav';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      say('Saved ' + a.download + (dry ? ', without the effect' : ', with the effect') + (banked ? '. It is in the bank too' : ''));
+    }
   } catch (err) { say('Save failed: ' + err.message, true); }
   btn.disabled = false;
 }
@@ -777,10 +789,26 @@ $('#play').addEventListener('click', () => (playing ? stop() : play()));
 $('#rec').addEventListener('click', toggleRec);
 $('#bypass').addEventListener('click', () => setValue('bypass', values.bypass > .5 ? 0 : 1));
 document.querySelectorAll('#src button').forEach(b => b.addEventListener('click', () => setSource(b.dataset.src)));
-$('#load').addEventListener('click', () => $('#file').click());
+$('#load').addEventListener('click', () => { if (typeof bankOpen === 'function') bankOpen(); else $('#file').click(); });      // sample.js: Load opens the bank, which has the file picker in it
 $('#file').addEventListener('change', e => { loadFile(e.target.files[0]); e.target.value = ''; });
 $('#thru').addEventListener('click', () => { thru = !thru; if (playing) play(); else syncUI(); });
-$('#save').addEventListener('click', saveWav);
+// Save asks which: the sound with the effect baked in, or the sample without it
+const saveMenu = document.createElement('div');
+saveMenu.className = 'save-menu'; saveMenu.hidden = true; saveMenu.setAttribute('role', 'menu'); saveMenu.setAttribute('aria-label', 'Save a WAV');
+saveMenu.innerHTML = '<button type="button" class="key-btn" role="menuitem" data-dry="0">With effect<small>as you hear it</small></button><button type="button" class="key-btn" role="menuitem" data-dry="1">Without effect<small>the clean loop</small></button>';
+document.body.appendChild(saveMenu);
+const setSaveMenu = on => {
+  if (on) { const b = $('#save').getBoundingClientRect(); saveMenu.style.top = Math.round(b.bottom + 6) + 'px'; saveMenu.style.right = Math.max(8, Math.round(window.innerWidth - b.right)) + 'px'; }
+  saveMenu.hidden = !on; $('#save').setAttribute('aria-expanded', on);
+};
+$('#save').addEventListener('click', () => {
+  const t = curTape();
+  if (!t || !t.buf) { say('Nothing to save: record a loop or load a file first', true); return; }
+  setSaveMenu(saveMenu.hidden);
+});
+saveMenu.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { setSaveMenu(false); saveWav({ dry: b.dataset.dry === '1' }); }));
+window.addEventListener('pointerdown', e => { if (!saveMenu.hidden && !saveMenu.contains(e.target) && e.target !== $('#save')) setSaveMenu(false); }, true);
+window.addEventListener('keydown', e => { if (e.key === 'Escape' && !saveMenu.hidden) setSaveMenu(false); });
 const app = $('#app');
 app.addEventListener('dragover', e => { e.preventDefault(); app.classList.add('dragging'); });
 app.addEventListener('dragleave', () => app.classList.remove('dragging'));
@@ -969,6 +997,65 @@ function drawMachine(g, xC, cy, R, sep, alpha, lineW) {
 // the loop strip: the whole loop or file, the part that plays drawn bright, two ends you can drag
 let srcGeom = null, drag = null;
 let clockGeom = null;          // where the counter is drawn this frame: a tap on it sets it back to 00:00
+// The loop strip's view: the stretch of the tape it shows. Normally all of it. With ZOOM on, just the loop and
+// a little either side. And while an end (or a fade tab) is being dragged, the view holds still, then closes
+// in round the finger once it has been held in one place for a moment, so the end can be set finely; let go
+// and it opens out again. Dragging to the strip's edge scrolls it.
+let loopZoom = false, frameDt = 0.016;
+try { loopZoom = localStorage.getItem('tapeloss.loopzoom') === '1'; } catch (_) {}
+const view = { a: 0, b: 0, src: null };
+function setLoopZoom(on) {
+  loopZoom = !!on;
+  try { localStorage.setItem('tapeloss.loopzoom', loopZoom ? '1' : '0'); } catch (_) {}
+  say(loopZoom ? 'The strip shows just the loop' : 'The strip shows the whole tape');
+}
+function stripView(t, x0, w) {
+  const dur = t.buf.duration, now = performance.now();
+  if (view.src !== t.buf || view.b <= view.a) { view.src = t.buf; view.a = 0; view.b = dur; }
+  let ta = 0, tb = dur;
+  if (drag) {
+    if (!drag.view) drag.view = [view.a, view.b];
+    const span = drag.view[1] - drag.view[0], f = clamp01((drag.lastX - x0) / w);
+    if (drag.join) { /* tempo.js: joining slices; the view stays put */ }
+    else if (drag.moved && !drag.zoomed && now - drag.still > 420) {            // held still: close in round the finger
+      drag.zoomed = true;
+      const zw = Math.max(0.04, Math.min(clamp(dur / 8, 0.4, 4), span / 3)), tm = drag.view[0] + f * span, a = clamp(tm - f * zw, 0, Math.max(0, dur - zw));
+      drag.view = [a, Math.min(dur, a + zw)];
+    } else if (drag.moved && (drag.lastX < x0 + 26 || drag.lastX > x0 + w - 26)) {      // at the strip's edge: scroll that way
+      const step = span * 0.9 * frameDt * (drag.lastX < x0 + 26 ? -1 : 1), a = clamp(drag.view[0] + step, 0, Math.max(0, dur - span));
+      if (a !== drag.view[0]) { drag.view = [a, a + span]; dragTo(drag.lastX, { x0, x1: x0 + w, a: view.a, b: view.b, dur }); }      // and the end follows the finger
+    }
+    [ta, tb] = drag.view;
+  } else if (loopZoom) {
+    const pad = Math.max(0.02, (t.le - t.ls) * 0.07);
+    ta = Math.max(0, t.ls - pad); tb = Math.min(dur, t.le + pad);
+  }
+  const k = 1 - Math.exp(-frameDt * 14), eps = (tb - ta) * 0.002;
+  view.a = Math.abs(ta - view.a) < eps ? ta : view.a + (ta - view.a) * k;
+  view.b = Math.abs(tb - view.b) < eps ? tb : view.b + (tb - view.b) * k;
+  return [view.a, view.b];
+}
+/** The waveform for the strip: the highest and lowest sample under each of its n + 1 columns, for the tape from a to b.
+ *  Wide views use the tape's stored outline; close ones are read from the tape itself, so the detail is real. */
+function stripPeaks(t, a, b, n) {
+  let c = t.vp;
+  if (c && c.src === t.buf && c.a === a && c.b === b && c.n === n) return c;
+  if (!c || c.n !== n) c = t.vp = { lo: new Float32Array(n + 1), hi: new Float32Array(n + 1) };
+  Object.assign(c, { src: t.buf, a, b, n });
+  const dur = t.buf.duration, span = b - a;
+  if (span > dur * 0.5) {
+    const bins = t.peaks.lo.length;
+    for (let q = 0; q <= n; q++) { const k = clamp(Math.floor((a + q / n * span) / dur * bins), 0, bins - 1); c.lo[q] = t.peaks.lo[k]; c.hi[q] = t.peaks.hi[k]; }
+  } else {
+    const d = t.buf.getChannelData(0), sr = t.buf.sampleRate, per = span * sr / n, stride = Math.max(1, Math.floor(per / 48));
+    for (let q = 0; q <= n; q++) {
+      let mn = 0, mx = 0;
+      for (let i = Math.max(0, Math.floor((a + q / n * span) * sr)), e = Math.min(d.length, i + Math.ceil(per) + 1); i < e; i += stride) { const v = d[i]; if (v < mn) mn = v; else if (v > mx) mx = v; }
+      c.lo[q] = mn; c.hi[q] = mx;
+    }
+  }
+  return c;
+}
 function drawSource(g, x0, x1, top, bot) {
   const t = curTape(), w = x1 - x0;
   g.textBaseline = 'alphabetic'; g.font = '600 9px ' + FONT; g.fillStyle = DIM; g.textAlign = 'left';
@@ -998,34 +1085,51 @@ function drawSource(g, x0, x1, top, bot) {
   let name = t.title; if (name.length > 36) name = name.slice(0, 34) + '…';
   g.fillText(`${source === 'loop' ? 'LOOP' : 'FILE'} · ${name.toUpperCase()}`, x0, top + 8);
   const [fi, fo] = fades(t), faded = fi > 0.005 || fo > 0.005;
-  g.textAlign = 'right';
-  g.fillText(`${t.ls.toFixed(2)} – ${t.le.toFixed(2)} S · ` + (faded ? `FADE ${fi.toFixed(1)} IN ${fo.toFixed(1)} OUT` : w > 420 ? 'DRAG THE ENDS · PULL THE DOTS TO FADE' : 'DRAG THE ENDS'), x1, top + 8);
-  const pt = top + 14, mid = (pt + bot) / 2, half = (bot - pt) / 2, dur = t.buf.duration, len = Math.max(0.02, t.le - t.ls);
-  const xs = x0 + t.ls / dur * w, xe = x0 + t.le / dur * w, pk = t.peaks, bins = pk.lo.length, n = Math.floor(w);
-  const xfi = xs + fi / dur * w, xfo = xe - fo / dur * w;
-  srcGeom = { x0, x1, top: pt - 10, bot: bot + 18, pb: bot, dur };
+  // tempo.js: its key at the end of this line, and, when open, its row of keys between this line and the waveform
+  const hasTempo = typeof tempoChip === 'function', th = hasTempo ? tempoRowH() : 0, tw = hasTempo ? tempoChip(g, x1, top) : 0;
+  if (th) tempoRow(g, x0, x1, top + 16, th);
+  const sw = typeof sampleChip === 'function' ? sampleChip(g, x1 - tw, top) : 0;      // sample.js: the NORM key
+  const bars = hasTempo && typeof tempoLenText === 'function' ? tempoLenText(t) : '';     // tempo.js: how long the loop is, in bars
+  g.font = '600 9px ' + FONT; g.fillStyle = DIM; g.textBaseline = 'alphabetic'; g.textAlign = 'right';
+  g.fillText(`${t.ls.toFixed(2)} – ${t.le.toFixed(2)} S` + (bars ? ' · ' + bars : '') + (faded ? ` · FADE ${fi.toFixed(1)} IN ${fo.toFixed(1)} OUT` : hasTempo ? '' : w > 420 ? ' · DRAG THE ENDS · PULL THE DOTS TO FADE' : ' · DRAG THE ENDS'), x1 - tw - sw, top + 8);
+  const pt = top + 14 + th, mid = (pt + bot) / 2, half = (bot - pt) / 2, dur = t.buf.duration, len = Math.max(0.02, t.le - t.ls);
+  const [va, vb] = stripView(t, x0, w), span = vb - va, px = w / span, X = sec => x0 + (sec - va) * px;      // the view, and where a time falls in it
+  const xs = X(t.ls), xe = X(t.le), n = Math.floor(w), pk = stripPeaks(t, va, vb, n);
+  const xfi = X(t.ls + fi), xfo = X(t.le - fo), inView = x => x >= x0 - 1 && x <= x1 + 1;
+  srcGeom = { x0, x1, top: pt - 10, bot: bot + 18, pb: bot, dur, a: va, b: vb };
   const shape = lvl => {                                               // lvl: the loop's fades, when drawing the part that plays
-    const k = q => 1.3 * (lvl ? fadeGain(q / n * dur - t.ls, len, fi, fo) : 1);
+    const k = q => 1.3 * (lvl ? fadeGain(va + q / n * span - t.ls, len, fi, fo) : 1);
     g.beginPath();
-    for (let q = 0; q <= n; q++) { const b = Math.min(bins - 1, Math.floor(q / n * bins)); const y = mid - Math.min(1, pk.hi[b] * k(q)) * half - 0.5; q ? g.lineTo(x0 + q, y) : g.moveTo(x0 + q, y); }
-    for (let q = n; q >= 0; q--) { const b = Math.min(bins - 1, Math.floor(q / n * bins)); g.lineTo(x0 + q, mid - Math.max(-1, pk.lo[b] * k(q)) * half + 0.5); }
+    for (let q = 0; q <= n; q++) { const y = mid - Math.min(1, pk.hi[q] * k(q)) * half - 0.5; q ? g.lineTo(x0 + q, y) : g.moveTo(x0 + q, y); }
+    for (let q = n; q >= 0; q--) g.lineTo(x0 + q, mid - Math.max(-1, pk.lo[q] * k(q)) * half + 0.5);
     g.closePath();
   };
+  g.save(); g.beginPath(); g.rect(x0, pt - 6, w, bot - pt + 12); g.clip();                   // nothing outside the view is drawn
+  if (hasTempo) tempoGrid(g, t, x0 - va * px, w, pt, bot, span);       // tempo.js: the grid, behind the waveform
   shape(false); g.fillStyle = 'rgba(241,239,232,.18)'; g.fill();
   g.save(); g.beginPath(); g.rect(xs, pt - 2, xe - xs, bot - pt + 4); g.clip(); shape(true); g.fillStyle = INK; g.fill(); g.restore();
+  if (hasTempo && typeof tempoMarks === 'function') tempoMarks(g, t, x0 - va * px, px, pt, bot);          // tempo.js: which slices the pattern uses
   g.strokeStyle = 'rgba(240,78,35,.75)'; g.lineWidth = 1.2;            // the fades, as ramps
   if (xfi - xs > 2) { g.beginPath(); g.moveTo(xs, bot + 2); g.lineTo(xfi, pt - 2); g.lineTo(xfi, bot + 3); g.stroke(); }
   if (xe - xfo > 2) { g.beginPath(); g.moveTo(xe, bot + 2); g.lineTo(xfo, pt - 2); g.lineTo(xfo, bot + 3); g.stroke(); }
+  g.restore();
   g.fillStyle = HOT;
   for (const [x, dir] of [[xs, 1], [xe, -1]]) {                       // the ends: big enough for a finger
+    if (!inView(x)) continue;
     g.fillRect(x - 1, pt - 4, 2, bot - pt + 8);
     g.beginPath(); g.moveTo(x, pt - 4); g.lineTo(x + dir * 9, pt - 4); g.lineTo(x, pt + 6); g.closePath(); g.fill();
   }
   for (const x of [xfi, xfo]) {                                       // the fade tabs: pull one inward from its end
+    if (!inView(x)) continue;
     g.beginPath(); g.arc(x, bot + 8, 5, 0, TWO_PI); g.fillStyle = HOT; g.fill();
     g.beginPath(); g.arc(x, bot + 8, 2, 0, TWO_PI); g.fillStyle = '#0b0b0c'; g.fill();
   }
-  if (bufNode) { const xp = x0 + tapePos() / dur * w; g.fillStyle = INK; g.fillRect(xp - 1, pt - 2, 2, bot - pt + 4); }
+  if (span < dur * 0.985) {                                            // zoomed: a thin bar shows which part of the whole tape this is
+    g.fillStyle = FAINT; g.fillRect(x0, pt - 5, w, 2);
+    g.fillStyle = drag && drag.zoomed ? HOT : INK; g.fillRect(x0 + va / dur * w, pt - 5, Math.max(3, span / dur * w), 2);
+  }
+  const tpos = hasTempo ? tempoPos() : undefined;                        // tempo.js: where its own player is, when it is the one playing
+  if (tpos !== undefined ? tpos !== null : bufNode) { const xp = X(tpos !== undefined ? tpos : tapePos()); if (inView(xp)) { g.fillStyle = INK; g.fillRect(xp - 1, pt - 2, 2, bot - pt + 4); } }
 }
 /** The sound: the last six seconds off the tape, newest at the left, with the grains riding on it.
  *  `bare` leaves the words off, for the Display. */
@@ -1131,8 +1235,9 @@ function drawWork(g, W, H, dt, bypassed) {
   const top = Math.max(machBot + 14, 100), sH = 52;
   // the sticker: on the right, under the level bars, when there is room above the loop strip
   if (typeof drawSticker === 'function' && top >= 118) drawSticker(g, (bx + x1) / 2, 98, 20, -0.04, x1 - bx);
-  drawSource(g, x0, x1, top, top + sH);
-  const aTop = top + sH + 16, rest = H - aTop - 10, aBot = aTop + rest * 0.64;
+  const th = typeof tempoRowH === 'function' ? tempoRowH() : 0;          // tempo.js: room for its row of keys
+  drawSource(g, x0, x1, top, top + sH + th);
+  const aTop = top + sH + th + 16, rest = H - aTop - 10, aBot = aTop + rest * 0.64;
   drawAudio(g, x0, x1, aTop, aBot, bypassed);
   drawMotion(g, x0, x1, aBot + 10, H - 10, dt, bypassed);
 }
@@ -1273,7 +1378,7 @@ function drawScopes(bypassed) {
 
 function draw(now) {
   requestAnimationFrame(draw);
-  const dt = Math.min(0.05, (now - lastT) / 1000 || 0); lastT = now;
+  const dt = Math.min(0.05, (now - lastT) / 1000 || 0); lastT = now; frameDt = dt || 0.016;
   glideHolds(dt);
   let speed = playing ? 1 : 0, grNow = 1;
   while (meters.length) {
@@ -1343,35 +1448,51 @@ deckCv.addEventListener('pointerdown', e => {
   if (!srcGeom) return;
   const r = deckCv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, G = srcGeom, t = curTape();
   if (y < G.top || y > G.bot || x < G.x0 - 22 || x > G.x1 + 22) return;
-  const w = G.x1 - G.x0, xs = G.x0 + t.ls / G.dur * w, xe = G.x0 + t.le / G.dur * w, tm = clamp01((x - G.x0) / w) * G.dur, grab = e.pointerType === 'mouse' ? 10 : 24;
-  const [fi, fo] = fades(t), di = Math.abs(x - (xs + fi / G.dur * w)), d2 = Math.abs(x - (xe - fo / G.dur * w));
+  const xs = stripX(G, t.ls), xe = stripX(G, t.le), tm = stripT(G, x), grab = e.pointerType === 'mouse' ? 10 : 24;
+  const [fi, fo] = fades(t), di = Math.abs(x - stripX(G, t.ls + fi)), d2 = Math.abs(x - stripX(G, t.le - fo));
   if (y >= G.pb - 2 && Math.min(di, d2) <= grab) drag = { fade: di <= d2 ? 'in' : 'out', moved: false, x };      // under the strip: a fade tab
   else if (Math.abs(x - xs) <= grab && Math.abs(x - xs) <= Math.abs(x - xe)) drag = { anchor: t.le, moved: true, x };
   else if (Math.abs(x - xe) <= grab) drag = { anchor: t.ls, moved: true, x };
+  else if (typeof tempoOwnsTaps === 'function' && tempoOwnsTaps() && tm > t.ls && tm < t.le) drag = { join: true, moved: false, x };      // tempo.js: in SHUFFLE a drag across slices joins them
   else drag = { anchor: tm, moved: false, x };          // away from both ends: sweep out a new loop, once you move
+  Object.assign(drag, { lastX: x, stillX: x, still: performance.now(), view: [G.a, G.b] });     // for the view: see stripView()
   try { deckCv.setPointerCapture(e.pointerId); } catch (_) {}
   e.preventDefault();
 });
-deckCv.addEventListener('pointermove', e => {
-  if (!drag || !srcGeom) return;
-  const r = deckCv.getBoundingClientRect(), x = e.clientX - r.left, G = srcGeom, t = curTape();
+// where a time falls on the strip, and the time under a point on it, in the view it is showing
+const stripX = (G, sec) => G.x0 + (sec - G.a) / (G.b - G.a) * (G.x1 - G.x0);
+const stripT = (G, x) => clamp(G.a + (x - G.x0) / (G.x1 - G.x0) * (G.b - G.a), 0, G.dur);
+/** Carry the drag to x: move the loop end (or fade tab) that is held. */
+function dragTo(x, G = srcGeom) {
+  const t = curTape();
+  if (!drag || !G || !t) return;
   if (!drag.moved && Math.abs(x - drag.x) < 6) return;
   drag.moved = true;
-  const tm = clamp01((x - G.x0) / (G.x1 - G.x0)) * G.dur;
+  if (drag.join) { if (typeof tempoSweep === 'function') tempoSweep(drag.x, x); return; }      // tempo.js
+  let tm = stripT(G, x);
   if (drag.fade) {
     const len = t.le - t.ls, [fi, fo] = fades(t);
     if (drag.fade === 'in') t.fi = clamp(tm - t.ls, 0, len - fo); else t.fo = clamp(t.le - tm, 0, len - fi);
     if (t.fi < 0.02) t.fi = 0; if (t.fo < 0.02) t.fo = 0;
     return;
   }
+  if (typeof tempoSnap === 'function') tm = tempoSnap(tm, drag.anchor, G);                       // tempo.js: a whole number of beats, when the end is near one
   let a = Math.min(drag.anchor, tm), b = Math.max(drag.anchor, tm);
   if (b - a < 0.05) { b = Math.min(G.dur, a + 0.05); a = Math.max(0, b - 0.05); }
   t.ls = a; t.le = b;
+}
+deckCv.addEventListener('pointermove', e => {
+  if (!drag || !srcGeom) return;
+  const x = e.clientX - deckCv.getBoundingClientRect().left;
+  if (Math.abs(x - drag.stillX) > 4) { drag.stillX = x; drag.still = performance.now(); }      // moving: not yet a hold
+  drag.lastX = x;
+  dragTo(x);
 });
 const endDrag = () => {
   if (!drag) return;
   const d = drag; drag = null;
-  if (!d.moved) return;
+  if (!d.moved) { if (!d.fade && typeof tempoTapStrip === 'function') tempoTapStrip(d.x); return; }     // tempo.js: a tap on the strip, not a drag
+  if (d.join) { if (typeof tempoJoin === 'function') tempoJoin(d.x, d.lastX); return; }      // tempo.js: the pattern picks it up as it plays
   const t = curTape();
   if (playing) startBuf();
   const [fi, fo] = fades(t);
@@ -1384,6 +1505,7 @@ deckCv.addEventListener('dblclick', e => {
   const r = deckCv.getBoundingClientRect(), y = e.clientY - r.top;
   if (y < srcGeom.top || y > srcGeom.bot) return;
   if (y >= srcGeom.pb - 2) { t.fi = 0; t.fo = 0; say('Loop fades off'); }        // on the tabs: clear the fades
+  else if (typeof tempoOwnsTaps === 'function' && tempoOwnsTaps()) return;      // tempo.js: taps there switch slices on and off
   else { t.ls = 0; t.le = t.buf.duration; say('Loops the whole thing'); }
   if (playing) startBuf();
 });
