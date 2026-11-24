@@ -21,11 +21,11 @@ const VocalDSP = (() => {
     let peak = -200;
     for (let i = 0; i < n; i++) { e[i] = (raw[Math.max(0, i - 1)] + raw[i] + raw[Math.min(n - 1, i + 1)]) / 3; if (e[i] > peak) peak = e[i]; }
     const sorted = Float32Array.from(e).sort(), floor = sorted[Math.floor(n * 0.1)];       // the quietest tenth: the room
-    const gate = Math.max(peak - 36, Math.min(peak - 12, floor + 9)), rise = 10 - 7 * sens, gap = Math.round((0.16 - 0.09 * sens) / 0.005), look = 14, out = [];
+    const gate = Math.max(peak - 42, Math.min(peak - 20, floor + 6)), rise = 10 - 7 * sens, gap = Math.round((0.16 - 0.09 * sens) / 0.005), look = 14, out = [];
     let last = -1e9, open = -1, quiet = 0;
     const close = i => { if (open >= 0) { out.push({ a: open * hop, b: Math.min(x.length, i * hop) }); open = -1; } };
     for (let i = 0; i < n; i++) {
-      if (e[i] < gate) { if (++quiet >= 10 && open >= 0) close(i - 8); continue; }       // 50 ms of silence ends a sound
+      if (e[i] < gate) { if (++quiet >= 20 && open >= 0) close(i - 12); continue; }     // 100 ms of silence ends a sound, and 40 ms of it is kept as its tail
       quiet = 0;
       let lo = 1e9, at = i;
       for (let j = Math.max(0, i - look); j < i - 1; j++) if (e[j] < lo) { lo = e[j]; at = j; }
@@ -41,6 +41,7 @@ const VocalDSP = (() => {
       if (s.b - s.a < sr * 0.06 && kept.length && s.a - kept[kept.length - 1].b < sr * 0.03) kept[kept.length - 1].b = s.b;
       else if (s.b - s.a >= sr * 0.04) kept.push(s);
     }
+    let list = kept;
     if (f0 && kept.length > 1) {                                         // a consonant belongs to the vowel beside it: the two are one syllable
       const sung = q => { let v = 0, c = 0; for (let i = Math.round(q.a / sr / HOP), e2 = Math.round(q.b / sr / HOP); i < e2; i++) { c++; if (f0[i] > 0) v++; } return c ? v / c : 0; };
       const small = q => q.b - q.a < sr * 0.15 && sung(q) < 0.25, near = (p, q) => q.a - p.b < sr * 0.04, joined = [];
@@ -50,9 +51,31 @@ const VocalDSP = (() => {
         if (pv && small(q) && near(pv, q)) { pv.b = q.b; continue; }                      // or closes the one before
         joined.push(q);
       }
-      return joined.slice(0, 64);
+      list = joined;
     }
-    return kept.length ? kept.slice(0, 64) : [{ a: 0, b: x.length }];
+    if (!list.length) return [{ a: 0, b: x.length }];
+    // A piece with no body of its own (a breath, a click, the room) is not a syllable. How loud each piece gets, against
+    // the usual one: 15 dB under, it goes to the syllable beside it, or, standing alone, is marked weak (left out to begin with).
+    const body = q => { const v = []; for (let i = Math.floor(q.a / hop), e2 = Math.min(n, Math.ceil(q.b / hop)); i < e2; i++) v.push(e[i]); v.sort((p, r) => p - r); return v.length ? v[Math.floor(v.length * 0.9)] : -200; };
+    for (const q of list) q.lv = body(q);
+    const lv = list.map(q => q.lv).sort((p, r) => p - r), usual = lv[lv.length >> 1], strong = [];
+    for (let i = 0; i < list.length; i++) {
+      const q = list[i], nx = list[i + 1], pv = strong[strong.length - 1];
+      if (q.lv < usual - 15) {
+        if (pv && q.a - pv.b < sr * 0.3) { pv.b = q.b; continue; }                        // it trails off the one before
+        if (nx && nx.a - q.b < sr * 0.1 && nx.lv >= usual - 15) { nx.a = q.a; continue; } // or leads into the next
+        q.weak = true;
+      }
+      strong.push(q);
+    }
+    // Nothing is thrown away between syllables: each one runs on to where the next begins (the quiet end of a word
+    // belongs to it), and before a pause it keeps a tail. So the pieces, laid end to end, are the voice as it was.
+    for (let i = 0; i < strong.length; i++) {
+      const q = strong[i], nx = strong[i + 1], lim = nx ? nx.a : x.length;
+      q.b = lim - q.b < sr * 0.3 ? lim : Math.min(lim, q.b + Math.round(sr * 0.12));
+      delete q.lv;
+    }
+    return strong.slice(0, 64);
   }
 
   function pitchTrack(x, sr, fmin = 70, fmax = 520) {
@@ -102,7 +125,9 @@ const VocalDSP = (() => {
     for (let i = 0; i < n; i++) { let q = 0; for (let j = i * hop, end = j + hop; j < end; j++) q += x[j] * x[j]; total += q; e[i] = Math.sqrt(q / hop); if (e[i] > peak) peak = e[i]; }
     let pre = 0;
     for (let i = 0; i < n; i++) if (e[i] >= peak * 0.35) { pre = i * hop; break; }
-    return { pre: Math.min(pre, Math.round(sr * 0.08)), rms: Math.sqrt(total / Math.max(1, n * hop)) };
+    let sum = 0, cnt = 0;
+    for (let i = 0; i < n; i++) if (e[i] >= peak * 0.25) { sum += e[i] * e[i]; cnt++; }      // how loud it is while it is sounding
+    return { pre: Math.min(pre, Math.round(sr * 0.08)), rms: cnt ? Math.sqrt(sum / cnt) : Math.sqrt(total / Math.max(1, n * hop)) };
   }
 
   /** x: one syllable. f0: its own pitch track (a reading every 10 ms from its first sample). med: the pitch it sits on.

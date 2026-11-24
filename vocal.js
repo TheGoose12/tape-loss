@@ -8,8 +8,11 @@
        square in the grid to put that step on that note (tap it again for a rest); ROLL MELODY writes a line
      · VOICE says how a syllable gets to its note. TAPE: the tape runs faster or slower, so higher is shorter
        and thinner, as a sampler does it. NATURAL: the pitch is moved and the voice keeps its character; TUNE
-       flattens the rise and fall of speech onto the note (the hard-tuned sound) and FIT makes each syllable
-       last until the next note
+       flattens the rise and fall of speech onto the note (the hard-tuned sound)
+     · NOTE LENGTH says what fills a note that is longer than its syllable. RUN ON: the tape keeps playing past the
+       syllable, into the words that follow, until the next note (and, in order, the next note takes up where this one
+       got to, so the melody walks through the words and nothing is said twice). SHORT: the syllable alone, then
+       silence. STRETCH (Natural only): the syllable's sung part is drawn out to last the whole note
      · TIMING. ON THE GRID: the syllables are played as steps, in tempo. AS SPOKEN: the voice keeps its own
        timing and order and only the notes change (each syllable starts on the scale note nearest to where it
        was spoken, which is plain auto-tune; tap the grid to move one)
@@ -31,18 +34,23 @@
        loop start and end, so the other modes see the same trim); a little of what was cut shows greyed either side,
        to pull a handle back out into. The melody is kept; the syllables are read again
      · while Rec is running the voice is drawn as it comes in, where the syllables will be
-     · PRINT writes what is playing, with its style, into the sample bank, so it opens in any other mode
+     · PRINT TO BANK writes what is playing, with its style, into the sample bank, so it opens in any other mode.
+       PRINT TO LOOP puts it straight on the Loop and goes back to the face you came from (Unit, Cassette or Reel),
+       where it is playing. A voice that was on the Loop is kept in the bank first, as "Voice", so it is not lost
    The sums are in dsp/vocal-dsp.js. Checked there against two made-up voices, one clean and one rough (a
    consonant before every vowel, a shaky pitch, breath, a hissing room): every syllable found with its consonant
-   kept on it, the pitch read to within 2 Hz, NATURAL landing within 2 cents of the note, FIT giving exactly the
+   kept on it, the pitch read to within 2 Hz, NATURAL landing within 2 cents of the note, STRETCH giving exactly the
    length asked for by drawing out the sung part and leaving the consonant as it was.
+   The syllables are cut so that nothing between them is lost: each runs on to where the next begins, and a piece with
+   no body of its own (a breath, the room) joins the syllable beside it or starts left out. Checked on a voice with soft
+   speech between short syllables in a noisy room: laid end to end the pieces give back all of it, with no holes.
    A quiet recording is brought up before it is read, loud and soft syllables are evened half-way, and on the
    grid each syllable is placed by where its body starts, so the beat is felt on the vowel.
 
    TO PULL IT OUT: delete this file, dsp/vocal-dsp.js and their <script> lines. The two hooks in app.js are
    marked "vocal.js" and check that the function exists first. */
 
-const VOX = { on: false, root: 9, scale: 'Minor pentatonic', steps: 16, div: 8, oct: 0, voice: 'tape', tune: 1, fit: true, pump: false, sens: 0.5, time: 'grid', bpm: 100, sat: false, dbl: false, air: false, echo: false, tab: 'melody', chain: 'off', order: 'order', follow: true, match: false };
+const VOX = { on: false, root: 9, scale: 'Minor pentatonic', steps: 16, div: 8, oct: 0, voice: 'tape', tune: 1, len: 'run', pump: false, sens: 0.5, time: 'grid', bpm: 100, sat: false, dbl: false, air: false, echo: false, tab: 'melody', chain: 'off', order: 'order', follow: true, match: false };
 try { Object.assign(VOX, JSON.parse(localStorage.getItem('tapeloss.vocal') || '{}')); } catch (_) {}
 const vSave = () => { try { localStorage.setItem('tapeloss.vocal', JSON.stringify(VOX)); } catch (_) {} };
 const V_SCALES = { 'Minor pentatonic': [0, 3, 5, 7, 10], 'Major pentatonic': [0, 2, 4, 7, 9], Minor: [0, 2, 3, 5, 7, 8, 10], Major: [0, 2, 4, 5, 7, 9, 11], Dorian: [0, 2, 3, 5, 7, 9, 10] };
@@ -58,11 +66,24 @@ const vBpm = () => (typeof TEMPO !== 'undefined' ? TEMPO.bpm : VOX.bpm);        
 function vSetBpm(v) {
   v = Math.max(40, Math.min(240, Math.round(v * 10) / 10));
   if (typeof TEMPO !== 'undefined' && typeof tSet === 'function') { TEMPO.guess = false; tSet('bpm', v); } else { VOX.bpm = v; vSave(); }
-  vCache.clear(); vSync();
+  vDeal(false); vSync();
 }
 const vStepSec = () => 60 / vBpm() * 4 / VOX.div;
 const vFree = () => VOX.time === 'free';                                 // AS SPOKEN: the voice keeps its own timing; only its notes are changed
 const vPick = a => a[Math.floor(Math.random() * a.length)];
+/** What a note longer than its syllable is filled with: 'run' (the tape plays on), 'short' (nothing) or 'fit' (the syllable, drawn out; Natural only). */
+const vLenMode = () => (VOX.len === 'short' ? 'short' : VOX.len === 'fit' && VOX.voice === 'natural' ? 'fit' : 'run');
+/** Where a note that starts on syllable `si` has to stop running on: at the next syllable that is left out, or the end. */
+function vStop(si) { for (let j = si + 1; j < vx.syl.length; j++) if (!vx.syl[j].on) return vx.syl[j].a; return vx.mono.length; }
+/** How fast the tape runs for syllable `s` on the pitch `hz` (TAPE voice; 1 otherwise). */
+const vRate = (s, hz) => (VOX.voice !== 'natural' && s.f && hz ? Math.max(0.25, Math.min(4, hz / s.f)) : 1);
+/** The stretch of the voice a step plays, in samples of it: [from, to]. */
+function vExtent(list, k, si) {
+  const st = list[k], q = vx.syl[si];
+  if (!st || !st.on || !q) return null;
+  const mode = vLenMode(), got = Math.round(vLen(k, list) * vStepSec() * vx.sr * vRate(q, vHz(st.deg)));
+  return [q.a, mode === 'fit' ? q.b : Math.min(mode === 'run' ? vStop(si) : q.b, q.a + Math.max(1, got))];
+}
 
 let vx = null;            // the voice as analysed: { key, sr, mono, f0, syl: [{ a, b, f, on }] }
 let vSteps = [];          // one per step: { on, deg, syl }
@@ -82,7 +103,7 @@ function vAnalyse() {
   let gain = 1;
   if (pk > 1e-4) { gain = Math.min(16, 0.9 / pk); for (let i = 0; i < n; i++) mono[i] *= gain; }      // a quiet recording is brought up to work on
   const f0 = VocalDSP.pitchTrack(mono, sr), syl = VocalDSP.syllables(mono, sr, VOX.sens, f0), fr = x => Math.round(x / sr / VocalDSP.HOP);
-  for (const s of syl) { s.f = VocalDSP.median(f0, fr(s.a), fr(s.b)); s.on = true; s.deg = -1; Object.assign(s, VocalDSP.shape(mono.subarray(s.a, s.b), sr)); }
+  for (const s of syl) { s.f = VocalDSP.median(f0, fr(s.a), fr(s.b)); s.on = !s.weak; s.deg = -1; Object.assign(s, VocalDSP.shape(mono.subarray(s.a, s.b), sr)); }
   const lv = syl.map(q => q.rms).sort((p, q) => p - q), midLv = lv[lv.length >> 1] || 1;
   for (const s of syl) s.gain = Math.max(0.6, Math.min(2, Math.sqrt(midLv / (s.rms || midLv))));      // loud and soft syllables are brought half-way to each other
   const fresh = !vx || vx.buf !== t.buf;                                // the same tape, trimmed or cut another way, keeps its melody
@@ -95,7 +116,7 @@ function vAnalyse() {
   vFlow(); vDeal(false);
   if (VOX.chain !== 'off') vAnswer(true);                               // call and answer is on: the new voice needs its answer
   const sung = syl.filter(s => s.f > 0).length;
-  say(`Voice read: ${syl.length} syllable${syl.length === 1 ? '' : 's'}, ${sung} with a pitch, speaking round ${vName(Math.round(mid))}` + (syl.length < 2 ? '. Try CUTS + for more' : ''));
+  say(`Voice read: ${syl.length} syllable${syl.length === 1 ? '' : 's'}, ${sung} with a pitch, speaking round ${vName(Math.round(mid))}` + (syl.some(s => s.weak) ? `. ${syl.filter(s => s.weak).length} too quiet to count start left out (tap one to bring it in)` : '') + (syl.length < 2 ? '. Try CUTS + for more' : ''));
 }
 /** AS SPOKEN's notes: each syllable on the note of the scale nearest to where it was spoken. That is plain auto-tune. */
 function vNearest() {
@@ -114,15 +135,21 @@ function vNearest() {
  *  steps whose syllable has gone are mended. */
 function vDeal(again) {
   if (!vx) return;
-  const pool = vx.syl.map((s, i) => i).filter(i => vx.syl[i].on), inOrder = VOX.order !== 'mix';
-  for (const list of vAlt ? [vSteps, vAlt.steps] : [vSteps]) { let k = 0; for (const st of list) {
-    if (!pool.length) { st.syl = -1; continue; }
+  const pool = vx.syl.map((s, i) => i).filter(i => vx.syl[i].on), inOrder = VOX.order !== 'mix', walk = inOrder && !vFree() && vLenMode() === 'run';
+  for (const list of vAlt ? [vSteps, vAlt.steps] : [vSteps]) { let k = 0, at = -1, cursor = 0; list.forEach((st, j) => {
+    st.use = null;
+    if (!pool.length) { st.syl = -1; return; }
     if (inOrder) {
-      if (!st.on) { st.syl = pool[k % pool.length]; st.own = false; continue; }
-      const mine = pool[k++ % pool.length];
+      if (!st.on) { st.syl = pool[k % pool.length]; st.own = false; return; }
+      let mine = pool[k++ % pool.length];
+      if (walk && at >= 0) {                                             // the next syllable that starts where the last note got to (or just before)
+        mine = pool.find(i => i > at && vx.syl[i].a >= cursor - Math.min(vx.sr * 0.06, (vx.syl[i].b - vx.syl[i].a) * 0.4));
+        if (mine === undefined) mine = pool[0];                           // off the end: the words go round
+      }
       if (!(st.own && pool.includes(st.syl))) { st.syl = mine; st.own = false; }
     } else if (again === true || !pool.includes(st.syl)) st.syl = vPick(pool);
-  } }
+    if (st.on) { st.use = vExtent(list, j, st.syl); at = st.syl; cursor = st.use ? st.use[1] : 0; }
+  }); }
   vCache.clear();
 }
 /** MATCH: as many sounding steps as there are syllables in use, so one pass of the melody is one pass of the words.
@@ -206,7 +233,7 @@ function vAnswer(quiet) {
   if (!vx) return;
   const B = vMakeAnswer(vData('A'));
   if (vPhrase === 'B') { vSteps = B.steps; vx.syl.forEach((q, i) => { q.deg = B.degs[i]; }); } else vAlt = B;
-  vCache.clear(); vSync();
+  vDeal(false); vSync();                                                  // its notes are other notes: what each one plays is worked out again
   if (!quiet) say(B.text);
 }
 /** Put the other phrase on the grid. B is written the first time it is asked for. */
@@ -220,21 +247,25 @@ function vShow(ph, quiet) {
 /** How many steps a note lasts: until the next one, four at most. */
 function vLen(k, steps = vSteps) { let n = 1; while (n < 4 && k + n < steps.length && !steps[k + n].on) n++; return n; }
 /** Syllable `si` on the pitch `hz` (0: as it is), as samples ready to play. slot: how long it may last, in samples
- *  (0: as long as it likes); with FIT it is stretched or squeezed to exactly that. AIR adds the same sound an octave up. */
+ *  (0: as long as it likes); NOTE LENGTH says what fills it (see vLenMode). AIR adds the same sound an octave up. */
 function vRender(si, hz, slot) {
   const s = vx && vx.syl[si];
   if (!s) return null;
-  const sr = vx.sr, natural = VOX.voice === 'natural', fit = natural && VOX.fit && slot ? slot : 0;
-  const key = [si, hz.toFixed(2), VOX.voice, natural ? VOX.tune : 0, fit, slot, VOX.air].join();
+  const sr = vx.sr, natural = VOX.voice === 'natural', mode = vLenMode(), fit = mode === 'fit' && slot ? slot : 0, run = mode === 'run';
+  const key = [si, hz.toFixed(2), VOX.voice, natural ? VOX.tune : 0, mode, slot, VOX.air].join();
   let buf = vCache.get(key);
   if (buf) return buf;
-  const seg = vx.mono.subarray(s.a, s.b), fr = x => Math.round(x / sr / VocalDSP.HOP), track = vx.f0.subarray(fr(s.a), fr(s.b) + 1), to = s.f && hz ? hz : 0;
+  const fr = x => Math.round(x / sr / VocalDSP.HOP), to = s.f && hz ? hz : 0, own = s.b - s.a;
   // On the grid a syllable is placed by where its body starts, not by where it was cut: the breath or consonant that
   // leads into it (`pre`) sounds just before the step, so the part the ear hears as the beat lands on the beat.
-  const rate = !natural && to ? Math.max(0.25, Math.min(4, to / s.f)) : 1, pre = slot ? Math.round((s.pre || 0) / rate) : 0, want = fit ? fit + pre : 0;
-  const waver = natural && VOX.tune > 0 && (want || seg.length) / sr > 0.35;
+  const rate = !natural && to ? vRate(s, to) : 1, pre = slot ? Math.round((s.pre || 0) / rate) : 0, want = fit ? fit + pre : 0;
+  // RUN ON: a note longer than its syllable keeps playing the tape, into what was said next (as spoken: the tape run
+  // faster would fall short of the next syllable, so it reads on as far as that takes)
+  const need = Math.ceil((slot ? slot + pre : own) * rate) + 64, end = run ? Math.min(vStop(si), Math.max(s.b, s.a + need)) : s.b;
+  const seg = vx.mono.subarray(s.a, end), track = vx.f0.subarray(fr(s.a), fr(end) + 1);
+  const waver = natural && VOX.tune > 0 && end === s.b && (want || seg.length) / sr > 0.35;
   const y = natural ? VocalDSP.psola(seg, sr, track, s.f, to, VOX.tune, want, waver) : rate !== 1 ? VocalDSP.resample(seg, rate) : seg;
-  const n = slot ? Math.min(y.length, slot + pre) : y.length, out = new Float32Array(n), at = Math.min(n >> 1, Math.round(sr * 0.003)), rel = Math.min(n >> 1, Math.round(sr * 0.03)), lvl = s.gain || 1;
+  const n = slot ? Math.min(y.length, slot + pre) : rate > 1 ? Math.min(y.length, own) : y.length, out = new Float32Array(n), at = Math.min(n >> 1, Math.round(sr * 0.003)), rel = Math.min(n >> 1, Math.round(sr * 0.03)), lvl = s.gain || 1;
   const up = VOX.air && to ? (natural ? VocalDSP.psola(seg, sr, track, s.f, to * 2, VOX.tune, y.length, waver) : VocalDSP.resample(seg, Math.min(8, 2 * to / s.f))) : null;
   for (let i = 0; i < n; i++) out[i] = (y[i] + (up && i < up.length ? up[i] * 0.32 : 0)) * lvl * Math.min(1, i / at, (n - 1 - i) / rel);
   buf = { data: out, node: null, pre };
@@ -355,11 +386,13 @@ async function vThrough(mono, sr) {
   const r = await ac.startRendering();
   return [0, 1].map(c => { const d = r.getChannelData(Math.min(c, r.numberOfChannels - 1)), o = new Float32Array(N); o.set(d.subarray(0, N)); for (let i = 0; i < tail; i++) o[i % N] += d[N + i]; return o; });
 }
-/** PRINT: the phrase, once through, with its style, into the sample bank. */
-async function vocalPrint() {
+/** PRINT: the phrase, once through, with its style. To the sample bank, or (to === 'loop') onto the Loop itself, which
+ *  the other faces play: the voice that was there goes to the bank first, and Vocal mode is left. */
+async function vocalPrint(to) {
   if (!vx) return;
   const sr = vx.sr, stepN = Math.round(vStepSec() * sr), seq = vSeq(), one = vFree() ? vx.mono.length : stepN * vSteps.length, N = one * seq.length, out = new Float32Array(N), beatN = Math.round(60 / vBpm() * sr);
-  const lay = (b, at) => { if (!b) return; at -= b.pre || 0; for (let i = Math.max(0, -at); i < b.data.length && at + i < N; i++) out[at + i] += b.data[i]; };
+  let laidTo = 0;                                                        // one voice, as when it plays: a note still sounding is let go where the next one starts
+  const lay = (b, at) => { if (!b) return; at -= b.pre || 0; for (let i = Math.max(0, at), tc = sr * 0.004; i < laidTo && i < N; i++) out[i] *= Math.exp(-(i - at) / tc); for (let i = Math.max(0, -at); i < b.data.length && at + i < N; i++) out[at + i] += b.data[i]; laidTo = Math.max(laidTo, Math.min(N, at + b.data.length)); };
   seq.forEach((ph, j) => { const D = vData(ph); if (vFree()) vx.syl.forEach((q, i) => lay(vSpoken(i, D.degs[i]), j * one + q.a)); else D.steps.forEach((st, k) => lay(vNote(k, D.steps), j * one + k * stepN)); });
   if (VOX.pump) for (let i = 0; i < N; i++) out[i] *= Math.min(1, 0.22 + 0.78 * ((i % beatN) / (beatN * 0.7)));
   const t = curTape(), name = 'Vocal · ' + (t ? t.title.replace(/\.[^.]+$/, '').replace(/^Vocal · /, '') : 'phrase');
@@ -367,6 +400,21 @@ async function vocalPrint() {
   let chans; try { chans = await vThrough(out, sr); } catch (_) { chans = [out, out]; }
   let peak = 0; for (const c of chans) for (let i = 0; i < c.length; i++) { const v = c[i] < 0 ? -c[i] : c[i]; if (v > peak) peak = v; }
   if (peak > 0.97) { const k = 0.97 / peak; chans = chans[0] === chans[1] ? [chans[0].map(v => v * k)] : chans.map(c => c.map(v => v * k)); if (chans.length === 1) chans.push(chans[0]); }      // never over full level
+  if (to === 'loop') {
+    const was = tape.loop, kept = source === 'loop' && !!was.buf, keepName = was.title === 'Loop' || /^Vocal · /.test(was.title) ? 'Voice' : was.title;
+    if (kept) {                                   // the voice is on the Loop: keep it before it is written over
+      const keep = []; for (let c = 0; c < was.buf.numberOfChannels; c++) keep.push(was.buf.getChannelData(c).slice());
+      const held = await bankStore('kept', keepName, keep, was.buf.sampleRate, { ls: was.ls, le: was.le, fi: was.fi || 0, fo: was.fo || 0, bpm: vBpm() });
+      if (!held) { say('The bank is full, so the voice could not be kept first. Remove a sample from Bank, then print to the Loop', true); return; }
+    }
+    const buf = ctx.createBuffer(2, N, sr);
+    buf.getChannelData(0).set(chans[0]); buf.getChannelData(1).set(chans[1] || chans[0]);
+    setTape('loop', buf, name); source = 'loop'; document.body.dataset.src = 'loop';
+    setVocal(false);                                                     // back to the face, where the print is now the loop (and plays, if the tape is running)
+    if (typeof syncUI === 'function') syncUI();
+    say(`Printed to the Loop: ${(N / sr).toFixed(1)} s at ${vBpm()} BPM` + (seq.length > 1 ? ` (${seq.join(' ')})` : '') + (kept ? `. The voice is in the Bank as "${keepName}"` : ''));
+    return;
+  }
   const ok = await bankStore('kept', name, chans, sr, { bpm: vBpm() });
   if (ok) say(`Printed to the bank: ${name}, ${(N / sr).toFixed(1)} s` + (seq.length > 1 ? ` (${seq.join(' ')})` : '') + '. Open it from Bank in any mode');
 }
@@ -389,7 +437,7 @@ vEl.innerHTML = `
       <div class="vgroup" id="v-ordg"><span id="v-count">Syllables</span><div class="vkeys"><div class="seg" id="v-order" role="radiogroup" aria-label="Syllables"><button type="button" role="radio" data-v="order">In order</button><button type="button" role="radio" data-v="mix">Shuffle</button></div><button type="button" class="vkey toggle" id="v-match" aria-pressed="false" aria-label="Match: one note for each syllable">Match</button></div></div>
       <button type="button" class="vkey big" id="v-deal" hidden>Nearest notes</button>
       <div class="vgroup"><span id="v-sel">Step</span><div class="vkeys"><button type="button" class="vkey" id="v-sylp" aria-label="Previous syllable for this step">◀ Syl</button><button type="button" class="vkey" id="v-syln" aria-label="Next syllable for this step">Syl ▶</button></div></div>
-      <button type="button" class="vkey big hot" id="v-print">Print to bank</button>
+      <div class="vgroup"><span>Print to</span><div class="vkeys"><button type="button" class="vkey hot" id="v-print" aria-label="Print to the sample bank">Bank</button><button type="button" class="vkey hot" id="v-print-loop" aria-label="Print to the Loop, for the other faces">Loop</button></div></div>
     </div>
     <div class="vrow" data-tab="melody">
       <div class="vgroup"><span>Tempo</span><div class="vkeys"><button type="button" class="vkey" id="v-slower" aria-label="Slower">−</button><output class="vread" id="v-bpm">100</output><button type="button" class="vkey" id="v-faster" aria-label="Faster">+</button><button type="button" class="vkey" id="v-tap">Tap</button></div></div>
@@ -404,7 +452,7 @@ vEl.innerHTML = `
     <div class="vrow" data-tab="sound">
       ${vSeg('v-voice', 'Voice', [['tape', 'Tape'], ['natural', 'Natural']])}
       ${vSeg('v-tune', 'Tune', [[0, 'Off'], [0.5, 'Half'], [1, 'Hard']])}
-      <div class="vgroup"><span>Length</span><button type="button" class="vkey toggle" id="v-fit" aria-pressed="false">Fit</button></div>
+      ${vSeg('v-len', 'Note length', [['run', 'Run on'], ['short', 'Short'], ['fit', 'Stretch']])}
       <div class="vgroup"><span>Style</span><div class="vkeys">${V_STYLE.map(([k, t]) => `<button type="button" class="vkey toggle" id="v-${k}" aria-pressed="false">${t}</button>`).join('')}</div></div>
       <div class="vgroup grow"><span>Reverb</span><input type="range" id="v-verb" min="0" max="100" value="0" aria-label="Reverb"></div>
     </div>
@@ -416,11 +464,10 @@ vEl.innerHTML = `
   </div>`;
 document.querySelector('.stage').appendChild(vEl);
 const vQ = s => vEl.querySelector(s), vWave = vQ('#v-wave'), vGrid = vQ('#v-grid');
-const V_SEGS = [['v-oct', 'oct', 1], ['v-steps', 'steps', 1], ['v-div', 'div', 1], ['v-voice', 'voice', 0], ['v-tune', 'tune', 1], ['v-time', 'time', 0], ['v-tab', 'tab', 0], ['v-chain', 'chain', 0]];
+const V_SEGS = [['v-oct', 'oct', 1], ['v-steps', 'steps', 1], ['v-div', 'div', 1], ['v-voice', 'voice', 0], ['v-tune', 'tune', 1], ['v-time', 'time', 0], ['v-tab', 'tab', 0], ['v-chain', 'chain', 0], ['v-len', 'len', 0]];
 function vSync() {
   vQ('#v-root').value = VOX.root; vQ('#v-scale').value = VOX.scale; vQ('#v-bpm').textContent = vBpm().toFixed(vBpm() % 1 ? 1 : 0);
   for (const [id, key] of V_SEGS) vEl.querySelectorAll(`#${id} button`).forEach(b => b.setAttribute('aria-checked', String(VOX[key]) === b.dataset.v));
-  vQ('#v-fit').setAttribute('aria-pressed', VOX.fit);
   vEl.querySelectorAll('#v-ph button').forEach(b => { b.setAttribute('aria-checked', VOX.follow ? b.dataset.v === 'follow' : b.dataset.v === vPhrase); b.classList.toggle('sounding', b.dataset.v === vPlaying); b.disabled = VOX.chain === 'off'; });
   vEl.querySelectorAll('#v-order button').forEach(b => b.setAttribute('aria-checked', (VOX.order === 'mix' ? 'mix' : 'order') === b.dataset.v));
   { const el = vQ('#v-seq'), seq = vSeq(), want = VOX.chain === 'off' ? '' : seq.join('');           // the phrases in the order they play
@@ -430,7 +477,8 @@ function vSync() {
   for (const [k] of V_STYLE) vQ('#v-' + k).setAttribute('aria-pressed', !!VOX[k]);
   vEl.querySelectorAll('.vrow[data-tab]').forEach(r => { r.hidden = r.dataset.tab !== VOX.tab; });
   const nat = VOX.voice === 'natural', free = vFree();
-  vEl.querySelectorAll('#v-tune button').forEach(b => { b.disabled = !nat; }); vQ('#v-fit').disabled = !nat || free;
+  vEl.querySelectorAll('#v-tune button').forEach(b => { b.disabled = !nat; });
+  vEl.querySelectorAll('#v-len button').forEach(b => { b.disabled = b.dataset.v === 'fit' ? !nat || free : false; b.setAttribute('aria-checked', b.dataset.v === (free && vLenMode() === 'fit' ? 'run' : vLenMode())); });
   vEl.querySelectorAll('#v-steps button, #v-div button').forEach(b => { b.disabled = free; });
   if (typeof values !== 'undefined') vQ('#v-verb').value = Math.round((values.onSpace > 0.5 ? values.space : 0) * 100);
   const st = vSteps[vSel], sy = vx && vx.syl[vSelSyl];
@@ -444,14 +492,16 @@ function vSync() {
 function vSet(key, val, msg) {
   VOX[key] = val; vSave(); vCache.clear();
   if (key === 'steps') { vAlt = null; vPhrase = 'A'; vRoll(true); vFlow(); vDeal(); }
-  if (key === 'time') { vFlow(); vDeal(false); }
+  if (key === 'time') vFlow();
+  if (key !== 'sens' && key !== 'tab') vDeal(false);                      // a note's length, pitch or voice changes how far it runs on
   if (key === 'chain') { if (val === 'off') vShow('A', true); else if (!vAlt) vAnswer(true); if (playing && source !== 'live') startBuf(); }
   if (key === 'sens') vAnalyse();
   if (key === 'time' && playing && source !== 'live') startBuf();          // the other way of keeping time starts from the top
   vSync();
   if (msg) say(msg);
 }
-const V_SAY = { voice: { tape: 'Tape pitch: the tape runs faster or slower, so higher notes are shorter and thinner, as a sampler does it', natural: 'Natural pitch: the note moves and the voice keeps its character. TUNE and FIT now apply' },
+const V_SAY = { voice: { tape: 'Tape pitch: the tape runs faster or slower, so higher notes are shorter and thinner, as a sampler does it', natural: 'Natural pitch: the note moves and the voice keeps its character. TUNE and STRETCH now apply' },
+  len: { run: 'Run on: a note longer than its syllable keeps playing the words that follow, until the next note', short: 'Short: each note is its syllable alone, then silence until the next', fit: 'Stretch: each syllable is drawn out to last until the next note' },
   tune: { 0: 'Tune off: the speech keeps its own rise and fall, moved to the note', 0.5: 'Tune half', 1: 'Tune hard: every syllable is held flat on its note' },
   chain: { off: 'Call and answer off: just the melody plays, as before', ab: 'Call and answer on: the melody (A), then an answer to it (B), and round again', aaab: 'Call and answer on: the melody three times, then the answer' },
   time: { grid: 'On the grid: the syllables are played as steps, in tempo', free: 'As spoken: the voice keeps its own timing, and each syllable is tuned to a note. Tap the grid to move a syllable to another note' } };
@@ -470,14 +520,14 @@ vQ('#v-match').addEventListener('click', () => {
   vDeal(false); vSync(); say(msg);
 });
 vQ('#v-answer').addEventListener('click', () => vAnswer());
-vQ('#v-fit').addEventListener('click', () => vSet('fit', !VOX.fit, VOX.fit ? 'Each syllable keeps its own length' : 'Each syllable is stretched or squeezed to last until the next note'));
 for (const [k, t, on] of V_STYLE) vQ('#v-' + k).addEventListener('click', () => vSet(k, !VOX[k], VOX[k] ? t + ' off' : on));
 vQ('#v-less').addEventListener('click', () => vSet('sens', Math.max(0, +(VOX.sens - 0.25).toFixed(2))));
 vQ('#v-more').addEventListener('click', () => vSet('sens', Math.min(1, +(VOX.sens + 0.25).toFixed(2))));
 vQ('#v-verb').addEventListener('input', e => { const v = +e.target.value / 100; setValue('onSpace', v > 0 ? 1 : 0); setValue('space', v); });
 vQ('#v-roll').addEventListener('click', () => vRoll());
 vQ('#v-deal').addEventListener('click', () => { vNearest(); say('Every syllable is back on the note nearest to where it was spoken'); vSync(); });
-vQ('#v-print').addEventListener('click', vocalPrint);
+vQ('#v-print').addEventListener('click', () => vocalPrint());
+vQ('#v-print-loop').addEventListener('click', () => vocalPrint('loop'));
 const vStepSyl = dir => {
   const st = vSteps[vSel]; if (!st || !st.on || !vx) return;
   const pool = vx.syl.map((s, i) => i).filter(i => vx.syl[i].on); if (!pool.length) return;
@@ -583,6 +633,7 @@ function vDraw() {
         g.font = '700 9px ' + FONT; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = s.on ? INKc : 'rgba(241,239,232,.3)';
         g.fillText(String(i + 1) + (s.f && sw > 34 ? ' ' + vName(Math.round(69 + 12 * Math.log2(s.f / 440))) : ''), x + 2, 3);
       });
+      if (!vFree() && st && st.on && st.use) { g.fillStyle = 'rgba(240,78,35,.3)'; g.fillRect(X(vx.t0 + st.use[0] / sr), 16, Math.max(2, (st.use[1] - st.use[0]) / sr * pps), H - 18); }      // all of what this note plays
       const mid = 16 + (H - 18) / 2, half = (H - 22) / 2, d0 = t.buf.getChannelData(0), d1 = t.buf.numberOfChannels > 1 ? t.buf.getChannelData(1) : d0, N = d0.length, k = vx.gain * 0.7;
       g.fillStyle = INKc;
       for (let px = 0; px < w; px++) {
