@@ -492,3 +492,12 @@ button.bpad:active { transform: translateY(3px); box-shadow: 0 1px 0 #0a0a0b, in
 /* the switch on top, and under it the controls it has chosen, set into the panel so they read as its page */
 .vrow.vtop { align-items: flex-end; }
 .vrow[data-tab] { padding: 9px 10px 10px; border-radius: 10px; background: rgba(0, 0, 0, .16); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .25); }
+
+/* Vocal mode: the phrases as they play, beside the status line; the syllables switch */
+.vhead { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 24px; }
+.vhead .vstatus { flex: 1 1 auto; min-width: 0; }
+.vseq { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.vseq[hidden], .vgroup[hidden] { display: none; }
+.vseq span { margin-right: 4px; font-size: 8.5px; font-weight: 800; letter-spacing: .2em; text-transform: uppercase; color: rgba(241, 239, 232, .5); }
+.vseq b { display: grid; place-items: center; width: 26px; height: 24px; border-radius: 6px; font-size: 13px; font-weight: 800; color: rgba(241, 239, 232, .45); box-shadow: inset 0 0 0 1px rgba(241, 239, 232, .22); }
+.vseq b.on { background: var(--accent); color: #140a06; box-shadow: none; }
