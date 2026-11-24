@@ -448,3 +448,47 @@ button.bpad:active { transform: translateY(3px); box-shadow: 0 1px 0 #0a0a0b, in
 .bank-bar p { margin: 0; font-size: 8.5px; letter-spacing: .22em; text-transform: uppercase; color: rgba(241, 239, 232, .5); }
 .bank .tech-head .key-btn { padding: 0 10px; }
 .bpad small { padding-right: 62px; }
+
+/* ── Vocal mode (vocal.js): a face of its own over the stage ── */
+.stage { position: relative; }
+.vocal[hidden] { display: none; }
+.vocal { position: absolute; inset: 0; z-index: 6; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 8px; background: var(--desk); }
+.vscreen {
+  display: grid; grid-template-rows: auto 96px minmax(0, 1fr); gap: 6px; min-height: 0; padding: 10px 12px 12px; border-radius: 14px;
+  background: #0b0b0c; box-shadow: inset 0 0 0 1px rgba(241, 239, 232, .1), inset 0 2px 10px rgba(0, 0, 0, .6);
+}
+.vstatus { margin: 0; min-height: 15px; font-size: 12px; font-weight: 600; color: var(--on-glass); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vscreen canvas { display: block; width: 100%; height: 100%; min-height: 0; touch-action: none; cursor: pointer; }
+.vpanel {
+  display: grid; gap: 8px; padding: 10px 12px 11px; border-radius: 14px; color: var(--ink);
+  background: linear-gradient(180deg, var(--plate-hi), var(--plate)); border: 1px solid var(--line); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6);
+}
+.vrow { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.vgroup { display: grid; gap: 3px; }
+.vgroup.grow { flex: 1 1 140px; }
+.vgroup > span { font-size: 8.5px; font-weight: 800; letter-spacing: .2em; text-transform: uppercase; color: var(--ink-2); }
+.vkeys { display: flex; gap: 4px; }
+.vkey {
+  min-height: 44px; min-width: 44px; padding: 0 14px; border-radius: 9px; border: 1px solid var(--tk-edge); cursor: pointer; white-space: nowrap;
+  background: linear-gradient(180deg, var(--tk-a), var(--tk-b)); box-shadow: 0 3px 0 var(--tk-edge); color: #1c1c1a;
+  font: inherit; font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+}
+.vkey:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--tk-edge); }
+.vkey:disabled { opacity: .35; }
+.vkey.big { padding: 0 18px; }
+.vkey.hot, .vkey.toggle[aria-pressed="true"] { background: var(--accent); color: #140a06; border-color: #a8330f; box-shadow: 0 3px 0 #a8330f; }
+.vocal .seg button { min-height: 44px; min-width: 44px; }
+.vocal .seg button:disabled { opacity: .35; }
+.vocal .seg button[aria-checked="true"] { background: var(--ink); color: var(--plate-hi); }
+.vocal select { min-height: 44px; }
+.vocal input[type="range"] { width: 100%; height: 44px; accent-color: var(--accent); }
+@media (max-height: 800px) { .vscreen { grid-template-rows: auto 70px minmax(0, 1fr); } .vpanel { gap: 6px; padding: 8px 12px 9px; } }
+
+.vrow[hidden] { display: none; }
+.vread { display: grid; place-items: center; min-width: 62px; height: 44px; border-radius: 8px; background: #0b0b0c; color: var(--on-glass); font: 600 17px ui-monospace, "SF Mono", Menlo, monospace; box-shadow: inset 0 0 0 1px rgba(241, 239, 232, .14); }
+
+.vocal .seg button.sounding { box-shadow: inset 0 -3px 0 var(--accent); }
+
+/* the switch on top, and under it the controls it has chosen, set into the panel so they read as its page */
+.vrow.vtop { align-items: flex-end; }
+.vrow[data-tab] { padding: 9px 10px 10px; border-radius: 10px; background: rgba(0, 0, 0, .16); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .25); }

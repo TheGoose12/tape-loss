@@ -43,7 +43,8 @@ const T_ORDERS = [['shuffle', 'SHUFFLE'], ['rnd', 'RANDOM'], ['updown', 'UP-DOWN
 const T_VARY = [['none', 'PLAIN'], ['rev', 'REVERSE'], ['stut', 'STUTTER'], ['oct', 'OCTAVE'], ['all', 'ALL']];
 const tName = (list, id) => (list.find(o => o[0] === id) || list[0])[1];
 if (!T_DIVS.some(o => o[0] === TEMPO.div)) TEMPO.div = 8;
-const T_ROW = 30;                                                        // height of the row of keys, px
+const T_ROW = 50;                                                        // height of the row of keys, px: the keys are 44 tall, a finger's width
+let tFont = 9;                                                           // their lettering: larger where the strip is wide enough
 if (!T_MODES.some(m => m[0] === TEMPO.mode)) TEMPO.mode = 'loop';
 
 const tOn = () => TEMPO.mode !== 'loop';
@@ -492,12 +493,12 @@ function tKey(g, x, y, w, h, label, state, act) {
   if (state === 'on') { g.fillStyle = INK; g.fill(); }
   else if (state === 'hot') { g.fillStyle = HOT; g.fill(); }
   else { g.strokeStyle = 'rgba(241,239,232,.26)'; g.lineWidth = 1; g.stroke(); }
-  g.font = '700 9px ' + FONT; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = `700 ${tFont}px ` + FONT; g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillStyle = state ? '#0b0b0c' : 'rgba(241,239,232,.78)';
   g.fillText(label, x + w / 2, y + h / 2 + 0.5);
   if (act) tHit(x, y, w, h, act);
 }
-const tW = (g, label, pad) => { g.font = '700 9px ' + FONT; return Math.ceil(g.measureText(label).width) + 2 * (pad || 9); };
+const tW = (g, label, pad) => { g.font = `700 ${tFont}px ` + FONT; return Math.ceil(g.measureText(label).width) + 2 * (pad || 9); };
 
 /** Is there a row to make room for? The faces ask before they lay the strips out. */
 function tempoRowH() {
@@ -506,7 +507,7 @@ function tempoRowH() {
 }
 /** The TEMPO key at the right end of the strip's top line. Returns the width it took. */
 function tempoChip(g, x1, top) {
-  tHits = []; tHitsAt = performance.now();
+  tHits = []; tHitsAt = performance.now(); tFont = 9;
   const label = tOn() || TEMPO.open ? `TEMPO ${TEMPO.bpm}` : 'TEMPO', w = tW(g, label, 7);
   g.save();
   rr(g, x1 - w, top - 3, w, 15, 4);
@@ -528,9 +529,10 @@ function tempoRow(g, x0, x1, y, h) {
   const kh = h - 6, t = curTape();
   let x = x0;
   // tempo: drag up or down to set it, tap in time to tap it in
-  const tight = x1 - x0 < 720, bw = tight ? 72 : 88;
+  const tight = x1 - x0 < 720, bw = tight ? 72 : 96;
+  tFont = tight ? 9 : 11;
   rr(g, x, y, bw, kh, 5); g.fillStyle = '#060607'; g.fill(); g.strokeStyle = 'rgba(241,239,232,.26)'; g.lineWidth = 1; g.stroke();
-  g.textBaseline = 'middle'; g.textAlign = 'right'; g.font = '600 13px ' + MONO; g.fillStyle = INK;
+  g.textBaseline = 'middle'; g.textAlign = 'right'; g.font = `600 ${tight ? 13 : 16}px ` + MONO; g.fillStyle = INK;
   g.fillText(TEMPO.bpm.toFixed(1), x + bw - 34, y + kh / 2 + 0.5);
   g.textAlign = 'left'; g.font = '700 8px ' + FONT; g.fillStyle = DIM; g.fillText('BPM', x + bw - 30, y + kh / 2 + 1);
   g.fillStyle = 'rgba(241,239,232,.5)';
@@ -703,7 +705,7 @@ function tDrop(g, key, x, y, h, tight) {
   const label = tName(T_DROPS[key], TEMPO[key]), w = tW(g, label, tight ? 6 : 9) + 11, q = tSel[key];
   const on = key === 'vary' && TEMPO.vary !== 'none';                      // lit only when it is adding something
   tKey(g, x, y, w, h, '', on ? 'on' : '');
-  g.font = '700 9px ' + FONT; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillStyle = on ? '#0b0b0c' : 'rgba(241,239,232,.78)';
+  g.font = `700 ${tFont}px ` + FONT; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillStyle = on ? '#0b0b0c' : 'rgba(241,239,232,.78)';
   g.fillText(label, x + (tight ? 6 : 9), y + h / 2 + 0.5);
   g.beginPath(); g.moveTo(x + w - 12, y + h / 2 - 2); g.lineTo(x + w - 6, y + h / 2 - 2); g.lineTo(x + w - 9, y + h / 2 + 2.5); g.closePath(); g.fill();     // the mark of a drop-down
   const box = [Math.round(x - 2), Math.round(y - 4), Math.round(w + 4), Math.round(h + 8)].join();

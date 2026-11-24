@@ -625,6 +625,7 @@ function closeLive() {
   if (guard) { guard = null; applyMute(); }          // with the microphone closed there is nothing to guard
 }
 function stopBuf() {
+  if (typeof vocalStop === 'function') vocalStop();                 // vocal.js
   if (typeof tempoStop === 'function') tempoStop();                 // tempo.js
   if (bufNode) { try { bufNode.stop(); } catch (_) {} bufNode.disconnect(); bufNode = null; }
 }
@@ -632,6 +633,7 @@ function startBuf() {
   stopBuf();
   const t = curTape();
   if (!t || !t.buf) return;
+  if (typeof vocalStart === 'function' && vocalStart()) return;     // vocal.js: in Vocal mode, it does the playing
   if (typeof tempoStart === 'function' && tempoStart()) return;     // tempo.js: with a tempo mode on, it does the playing
   const n = ctx.createBufferSource();
   const fb = fadedBuf(t);
